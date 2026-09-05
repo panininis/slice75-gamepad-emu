@@ -142,6 +142,40 @@ exaggerated.
 - `integration.py` gained the live restart check above.
 - Scratch profiling script untracked (`.gitignore`).
 
+## Third pass (2026-09-05, ~09:30–10:00) — robustness
+
+### 14. Correctness — config values were accepted unvalidated
+`/api/config` (and `load_config` for a hand-edited `config.json`) accepted
+**any** value: `gain: -3` would invert the stick, `deadzone: 5` would break
+the deadzone math, `max_update_hz: 99999` / `"garbage"` would corrupt the
+throttle / raise. Now a shared `_clamp_cfg()` coerces + range-clamps every
+key on **both** paths: `max_update_hz` 1..1000, `deadzone`/`stick_deadzone`
+0..0.5, `gain` 0..3; non-numeric junk gets a clean `400`.
+**Verified live:** `gain=99 → 3.0`, `deadzone=5 → 0.5`, `hz=99999 → 1000`,
+`hz="garbage" → 400 invalid max_update_hz`. (User's real settings restored
+immediately after the test.)
+
+### 15. UX — stream-health toasts (both UIs)
+The engine loop now emits **one-shot, edge-triggered** notifications:
+"ADC stream lost — use the engine button to recover" when the watchdog
+trips, "ADC stream restored" when frames resume (including after the
+in-place recover). Both the web dashboard (toast) and the desktop app
+(notify) surface it. Placed inside the loop's `try:` so a broken UI can't
+kill the engine.
+
+### 16. Correctness — restart() race (board-hang class)
+The first `restart()` implementation cleared `_starting` in `stop()` and
+called `start()` without it — so a racing `/api/start` (the UI button flips
+to "Connect & Start" during the stop phase) could fire a **second
+concurrent `start()`** while the first was still opening the vendor
+interface. Two concurrent `start()`s double-open the endpoint — the exact
+condition that hangs the board's ADC task. Now `restart()` holds the
+`_starting` guard across the **entire** stop+start window and calls
+`start(_from_restart=True)` (bypasses only its own guard; a plain start is
+still blocked). **Verified:** 5-scenario guard unit test (start / double /
+racing-start / restart / racing-restart) + live INTEGRATION restart
+(181 → 301 frames/1 s, stream healthy).
+
 ## Measured result
 
 Live web server (real HID + ViGEm pad, engine running):
