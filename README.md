@@ -121,7 +121,11 @@ app/
   integration.py    end-to-end test (real HID + ViGEm, includes a live
                     restart/recovery check)
   web/index.html    single-page dashboard (OLED black, no deps)
-run.bat  setup.bat  requirements.txt
+run.bat             start the web UI (http://127.0.0.1:8321)
+stop.bat            cleanly stop it (kills the port 8321 owner + sweeps
+                    stray app_web.py processes — keeps one-process discipline)
+setup.bat           one-time setup (venv + deps + ViGEmBus driver)
+requirements.txt
 ```
 
 Settings & mappings persist in `~/.slice-pad/` (`config.json`, `mapping.json`).
