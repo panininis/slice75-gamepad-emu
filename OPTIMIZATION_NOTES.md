@@ -89,15 +89,73 @@ closes them. SMOKE exits 0 cleanly.
 - **`app.py` GUI internals** — only the engine wiring was replaced; the
   customtkinter widget tree, bars, and stick visualizer are unchanged.
 
+## Second pass (2026-09-05, ~09:00–10:30) — perf + recovery
+
+### 8. Perf — `travel()` rescanned the 300-sample ring on every call
+The engine calls `read_key_value` → `vendor.travel()` 4× per tick. `travel()`
+did `max(ring)` over the **300-sample deque** every call — ~1.2M comparisons/s
+at 1 kHz, even though each ring only changes at the ~124 Hz ADC frame rate.
+Now `max(ring)` is cached and invalidated by a per-sensor generation counter
+(bumped in `_process_92` when a sample lands) → O(1) between frames.
+**Verified: cached == naive over 2000 mixed samples + full
+seed/baseline/press/release `travel()` path.**
+
+### 9. Perf — engine loop no longer polls blindly at 1 kHz
+The loop now paces adaptively: **1 ms while a key is held or the stick is
+off-center** (interaction), **~8 ms (~125 Hz, the ADC frame rate) when idle**
+(no new analog data can arrive faster; an idle stick is 0 by definition).
+A press is caught within one tick (≤1 ms active, ≤~8 ms from idle). Idle CPU
+falls ~8× with no measurable responsiveness hit (a native Xbox pad refreshes
+at 64–125 Hz).
+
+### 10. Perf — refcounted 1 ms Win32 timer, shared by both loops
+The sub-ms sleeps in the vendor ADC loop previously only got 1 ms resolution
+while the engine loop was running (it owned the only `timeBeginPeriod`).
+Now `slice_capture` exposes `timer_res_begin()/end()` (refcounted); both the
+ADC loop and the engine loop hold a reference, so timer resolution is correct
+whichever is running and the system timer is restored when both stop.
+
+### 11. Recovery — one-click ADC stream recovery (was: "unplug & replug")
+The firmware's RM6X21 task can hang (0x92 frames stop, control plane still
+answers). The only known revival is **reopening the vendor endpoint** (verified
+during research — replugging restores the stream, settings retained). An engine
+stop+start is exactly a reopen, so `GamepadEngine.restart()` now does it in
+place, and the web UI surfaces it: when `stream_dead` the engine button becomes
+**"Recover ADC Stream"** (amber); one click runs `/api/restart` and the stream
+comes back **without touching the USB cable**.
+**Verified live: INTEGRATION restart check — fresh vendor stream
+182 → 303 frames in 1 s, `stream_dead=False` after restart.**
+
+### 12. Cosmetic — raw ghost now draws ON TOP of the ball
+The dotted raw-travel ghost was drawn *before* the stick ball, so the ball's
+22 px cyan glow hid it — making the 0.02 stick-deadzone gap look bigger than
+it is (it's ~2 px at most, same-tick data, no time lag). The ghost is now
+drawn after the ball (flat, slightly brighter), so the gap is visible but not
+exaggerated.
+
+### 13. Housekeeping
+- **numpy uninstalled** from the venv (installed but never imported;
+  already excluded from `requirements.txt`).
+- **`snapshot()` deep-copy measured**: 7.9 µs/call → **0.024% of a core** at
+  30 Hz. Negligible — left as-is (optimizing would risk correctness for
+  nothing); documented here so it isn't "fixed" needlessly.
+- `integration.py` gained the live restart check above.
+- Scratch profiling script untracked (`.gitignore`).
+
 ## Measured result
 
 Live web server (real HID + ViGEm pad, engine running):
-- **CPU: ~0% of one core in steady state** (the earlier 12.6% sample was the
-  connect/warm-up burst).
-- **RAM: 42 MB**, exactly one clean process on port 8321.
-- Engine healthy: 114k polls, 11k pad updates, `stream_dead=False`,
+- **CPU: 8.9% of one core over 90 s** (steady state, new-code sample via
+  `Get-Process.TotalProcessorTime` delta). The earlier 12.6% figure was a
+  15 s burst that included warm-up; the earlier "~0%" 30 s sample caught a
+  low-activity window. 8.9% is the honest sustained number, and it is the
+  combined cost of the ~660/s ADC reader thread (board-limited) + the engine
+  loop (now 125 Hz idle) + SSE.
+- **RAM: ~42 MB**, exactly one clean process on port 8321.
+- Engine healthy: 662+ pad updates at last check, `stream_dead=False`,
   `dry_run=False`, firmware `App v1.1.7.3`.
 
 ## Test status
 - SMOKE: **PASS** (exits 0)
-- INTEGRATION: **PASS** on live hardware (W → y16=32767, parser trW=0.962)
+- INTEGRATION: **PASS** on live hardware (W → y16=32767, parser trW=0.962,
+  **restart recovery verified: fresh stream 182 → 303 frames/1 s**)
