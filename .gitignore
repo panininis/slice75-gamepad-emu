@@ -5,3 +5,5 @@ __pycache__/
 *.jsonl
 ui_shot.png
 research/
+web_*.log
+app_run_*.log
