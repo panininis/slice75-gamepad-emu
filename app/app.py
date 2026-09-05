@@ -28,17 +28,14 @@ from tkinter import messagebox
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from slice_capture import (  # noqa: E402
-    DigitalKeys, HidAnalog, Mapping, OsKeys, VendorStream,
-    find_interfaces, read_key_value,
-)
-from gamepad_bridge import GamepadBridge, GamepadConfig  # noqa: E402
+from slice_capture import Mapping  # noqa: E402
+from gamepad_bridge import GamepadConfig  # noqa: E402
+from engine_core import GamepadEngine, MAPPING_PATH  # noqa: E402
 from applog import (  # noqa: E402
     log, log_exception, install_hooks, touch_latest, LOG_FILE,
 )
 
 APP_DIR = os.path.join(os.path.expanduser("~"), ".slice-pad")
-MAPPING_PATH = os.path.join(APP_DIR, "mapping.json")
 CFG_PATH = os.path.join(APP_DIR, "config.json")
 
 # Dynamic response-curve presets: (label, expression in v)
@@ -202,36 +199,62 @@ class App(ctk.CTk):
         self.after(30, self._apply_chrome)
         self.after(90, self._force_focus)
 
-        self.vendor = None
-        self.hid = None
-        self.dkeys = None
-        self.oskeys = OsKeys()      # OS-level WASD press watcher (win32)
-        self.bridge = None
-        self._calib_running = False
-        self.mapping = Mapping.load(MAPPING_PATH)
         self.cfg = self._load_config()
-        self.running = False
-        self.engine = None
-        self._stop_evt = threading.Event()
+        self._mapping = Mapping.load(MAPPING_PATH)
+        # The WASD->gamepad pipeline is the SHARED engine (engine_core) —
+        # the same class the web UI drives, so both front-ends behave
+        # identically and bugs are fixed in one place.  The GUI reads it
+        # through read-through properties (self.vendor, self.bridge, ...).
+        self._eng = GamepadEngine(self._mapping, self.cfg, self._ui_queue_append)
         self._ui_queue: list = []
         self._ui_qlock = threading.Lock()      # queue is touched by engine + UI threads
         self._ui_dirty = threading.Event()
-        self.stats = {"frames": 0, "rate": 0.0, "vendor_frames": 0, "hz": 0.0}
         log("app starting", "INFO")
         log(f"python {sys.version.split()[0]}  |  log file: {LOG_FILE}")
         self._key_states = {"W": 0.0, "A": 0.0, "S": 0.0, "D": 0.0}
         self._curve_error = ""
         self._cal_key = None
-        self._lc: dict = {}  # live auto-cal tracking: key -> state
-        # pre-press baseline per key: {key: {"hid": [6], "ven": {pos: mm}, "t": ts}}
-        # refreshed by the engine loop while the key is NOT held — calibration
-        # scores *rise from baseline*, so stale values (e.g. a previous key's
-        # travel that was never zeroed) can never win the mapping.
-        self._key_baseline: dict = {}
+        self._eng_ui_state = ("idle",)
 
         self._build_ui()
         self.after(100, self._poll_ui)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    # ---------------- shared engine accessors ----------------
+    # Read-through properties so GUI code keeps reading self.vendor /
+    # self.bridge / self.running / self.stats while the state lives in the
+    # shared GamepadEngine.
+    @property
+    def running(self) -> bool:
+        return self._eng.running
+
+    @property
+    def vendor(self):
+        return self._eng.vendor
+
+    @property
+    def hid(self):
+        return self._eng.hid
+
+    @property
+    def dkeys(self):
+        return self._eng.dkeys
+
+    @property
+    def bridge(self):
+        return self._eng.bridge
+
+    @property
+    def oskeys(self):
+        return self._eng.oskeys
+
+    @property
+    def stats(self):
+        return self._eng.stats
+
+    @property
+    def mapping(self):
+        return self._eng.mapping
 
     # ---------------- config persistence ----------------
     def _load_config(self) -> GamepadConfig:
@@ -589,112 +612,6 @@ class App(ctk.CTk):
         self._redraw_curve()
         log(f"response curve {'updated' if ok else 'REJECTED (invalid)'}: {expr!r}")
 
-    def _key_locked(self, key: str) -> bool:
-        src = self.mapping.keys.get(key)
-        if src == "adc":
-            return key in self.mapping.adc_pos
-        if src == "vendor":
-            return key in self.mapping.vendor_pos
-        if src == "hid":
-            return key in self.mapping.hid_byte
-        return False
-
-    def _refresh_baselines(self, held: set):
-        """Per-key pre-press baselines for calibration (engine thread).
-        Updated only while the key is NOT held, at most every 250 ms."""
-        now = time.time()
-        due = []
-        for k in ("W", "A", "S", "D"):
-            if k in held:
-                continue
-            b = self._key_baseline.get(k)
-            if b is None or now - b["t"] >= 0.25:
-                due.append(k)
-        if not due:
-            return
-        hid_snap = self.hid.snapshot() if (self.hid and self.hid.opened) else None
-        ven_snap = self.vendor.snapshot() if (self.vendor and self.vendor.running) else None
-        adc_snap = self.vendor.travel_snapshot() if (self.vendor and self.vendor.running) else None
-        for k in due:
-            self._key_baseline[k] = {"hid": hid_snap or [0] * 6,
-                                     "ven": ven_snap or {},
-                                     "adc": adc_snap or {}, "t": now}
-
-    def _live_autocal(self, wasd_held: set):
-        """Self-calibration: while exactly one WASD key is held, watch which
-        channel spikes; after a short hold with a strong spike, lock the
-        mapping and persist it.  Works for both data sources.
-        Runs in the ENGINE thread — must only use thread-safe snapshots."""
-        if len(wasd_held) != 1 or not self.cfg.live_autocal:
-            return
-        k = next(iter(wasd_held))
-        if self._key_locked(k):
-            return
-        st = self._lc.get(k)
-        if st is None:
-            st = self._lc[k] = {"t0": time.time(), "hid": [0] * 6, "ven": {},
-                                "adc": {}, "done": False}
-            base = self._key_baseline.get(k)
-            st["base_hid"] = base["hid"] if base else [0] * 6
-            st["base_ven"] = base["ven"] if base else {}
-        now = time.time()
-        # sample peaks (thread-safe snapshots)
-        hid_snap = self.hid.snapshot() if (self.hid and self.hid.opened) else None
-        if hid_snap:
-            for i, v in enumerate(hid_snap):
-                if v > st["hid"][i]:
-                    st["hid"][i] = v
-        ven_snap = self.vendor.snapshot() if (self.vendor and self.vendor.running) else None
-        if ven_snap:
-            for pos, v in ven_snap.items():
-                if v > st["ven"].get(pos, 0):
-                    st["ven"][pos] = v
-        adc_snap = self.vendor.travel_snapshot() if (self.vendor and self.vendor.running) else None
-        if adc_snap:
-            for pos, v in adc_snap.items():
-                if v > st["adc"].get(pos, 0.0):
-                    st["adc"][pos] = v
-        if now - st["t0"] < 0.35:
-            return
-        # ADC travel is already 0..1 (0 at rest, ~1 at full press): score the
-        # peak directly — no baseline subtraction needed, and it is immune to
-        # slow rest drift.  Legacy sources still use rise-from-baseline.
-        hid_rise = [max(0, st["hid"][i] - st["base_hid"][i]) for i in range(6)]
-        ven_rise = {p: max(0, v - st["base_ven"].get(p, 0)) for p, v in st["ven"].items()}
-        hid_best = max(hid_rise)
-        ven_best = max(ven_rise.values()) if ven_rise else 0
-        adc_best = max(st["adc"].values()) if st["adc"] else 0.0
-        hid_i = hid_rise.index(hid_best)
-        ven_p = max(ven_rise, key=lambda q: ven_rise[q]) if ven_rise else None
-        adc_p = max(st["adc"], key=lambda q: st["adc"][q]) if st["adc"] else None
-        hid_score = hid_best / 255.0
-        ven_score = ven_best / 3300.0
-        lock_src = None
-        if adc_best >= 0.15:
-            lock_src = ("adc", adc_p, f"travel {adc_best:.2f}")
-        elif ven_score >= 0.15 and ven_score >= hid_score * 0.8:
-            lock_src = ("vendor", ven_p, f"rise {ven_best/1000:.3f} mm")
-        elif hid_score >= 0.15:
-            lock_src = ("hid", hid_i, f"rise {hid_best}/255")
-        if lock_src is None:
-            return
-        src, ident, val = lock_src
-        try:
-            self.mapping.keys[k] = src
-            if src == "adc":
-                self.mapping.adc_pos[k] = ident
-            elif src == "vendor":
-                self.mapping.vendor_pos[k] = ident
-            else:
-                self.mapping.hid_byte[k] = ident
-            self.mapping.save(MAPPING_PATH)
-        except Exception as e:
-            log_exception(f"live-autocal save {k}", e)
-            return
-        st["done"] = True
-        log(f"auto-calibrated {k} → {src} {ident} (peak {val})")
-        self._ui_queue_append(("notify", f"auto-calibrated {k} → {src} {ident}  (peak {val})", GOOD))
-
     # ---------------- calibration ----------------
     def _ui_notify(self, text, color=DIM):
         """UI-thread only. (Background threads use _ui_queue 'notify'.)"""
@@ -707,342 +624,37 @@ class App(ctk.CTk):
                 self._ui_queue.pop(0)
         self._ui_dirty.set()
 
-    def _collect_spike(self, key: str, t0: float, dur: float = 2.5):
-        """Collect which sources spike while key `key` is held.
-        CALIBRATION THREAD: reads only via thread-safe snapshots.
-        adc_max is the peak normalized travel (0..1) per sensor pos."""
-        hid_max = [0] * 6
-        ven_max = {}
-        adc_max: dict[int, float] = {}
-        t_end = t0 + dur
-        n = 0
-        while time.time() < t_end:
-            n += 1
-            if n % 500 == 0:
-                log(f"calibrate {key}: collecting {n*0.002:.1f}s "
-                    f"(hid max {max(hid_max)} ven max "
-                    f"{max(ven_max.values(), default=0)} adc max "
-                    f"{max(adc_max.values(), default=0):.2f})", "DEBUG")
-            hid_snap = self.hid.snapshot() if (self.hid and self.hid.opened) else None
-            if hid_snap:
-                for i, v in enumerate(hid_snap):
-                    if v > hid_max[i]:
-                        hid_max[i] = v
-            ven_snap = self.vendor.snapshot() if (self.vendor and self.vendor.running) else None
-            if ven_snap:
-                for p2, v in ven_snap.items():
-                    if v > ven_max.get(p2, 0):
-                        ven_max[p2] = v
-            adc_snap = self.vendor.travel_snapshot() if (self.vendor and self.vendor.running) else None
-            if adc_snap:
-                for p2, v in adc_snap.items():
-                    if v > adc_max.get(p2, 0.0):
-                        adc_max[p2] = v
-            time.sleep(0.002)
-        ven_nz = {p2: v for p2, v in ven_max.items() if v > 50}
-        adc_nz = {p2: round(v, 3) for p2, v in adc_max.items() if v > 0.05}
-        log(f"calibrate {key}: peaks hid={hid_max} ven={ven_nz} adc={adc_nz}")
-        return hid_max, ven_max, adc_max
-
-    def _peek_baseline(self):
-        """Thread-safe snapshot of current analog state (pre-press baseline)."""
-        hid = self.hid.snapshot() if (self.hid and self.hid.opened) else [0] * 6
-        ven = self.vendor.snapshot() if (self.vendor and self.vendor.running) else {}
-        adc = self.vendor.travel_snapshot() if (self.vendor and self.vendor.running) else {}
-        return hid, ven, adc
-
-    def _pick_source(self, key: str, hid_rise, ven_rise, adc_peak=None):
-        """Choose the best data source for `key` and record the mapping.
-
-        adc_peak: {pos: travel 0..1} — raw Hall ADC (primary, self-normalized:
-        0 at rest, ~1 at full press, so no baseline subtraction is needed).
-        hid_rise / ven_rise are legacy RISES from the pre-press baseline.
-        """
-        if not self.mapping:
-            self.mapping = Mapping.load(MAPPING_PATH)
-        best_hid = max(range(6), key=lambda i: hid_rise[i])
-        best_hid_v = hid_rise[best_hid]
-        if ven_rise:
-            best_ven_p = max(ven_rise, key=lambda p2: ven_rise[p2])
-            best_ven_v = ven_rise[best_ven_p]
-        else:
-            best_ven_v = 0
-        ven_score = best_ven_v / 3300.0 if best_ven_v else 0.0
-        hid_score = best_hid_v / 255.0 if best_hid_v else 0.0
-        adc_score = 0.0
-        adc_p = None
-        if adc_peak:
-            adc_p = max(adc_peak, key=lambda q: adc_peak[q])
-            adc_score = adc_peak[adc_p]
-        if adc_score > 0.15:
-            self.mapping.keys[key] = "adc"
-            self.mapping.adc_pos[key] = adc_p
-            _bk = "T1" if adc_p < 61 else "T2"
-            src = f"ADC sensor {adc_p} (bank {_bk}, idx {adc_p % 61})"
-            val = f"travel {adc_score:.2f}"
-        elif ven_score > 0.15 and ven_score >= hid_score * 0.8:
-            self.mapping.keys[key] = "vendor"
-            self.mapping.vendor_pos[key] = best_ven_p
-            src = f"vendor matrix pos {best_ven_p}"
-            val = f"{best_ven_v/1000:.3f} mm"
-        elif hid_score > 0.15:
-            self.mapping.keys[key] = "hid"
-            self.mapping.hid_byte[key] = best_hid
-            src = f"HID analog byte {best_hid}"
-            val = f"{best_hid_v}/255"
-        else:
-            log(f"calibrate {key}: no source above threshold "
-                f"(adc {adc_score:.2f}, hid {best_hid_v}/255, "
-                f"ven {best_ven_v/1000:.3f}mm)")
-            return False
-        try:
-            self.mapping.save(MAPPING_PATH)
-        except Exception as e:
-            log_exception(f"calibrate save {key}", e)
-        log(f"calibrated {key} → {src} (peak {val})")
-        self._ui_queue_append(("notify", f"{key} → {src}  (peak {val})", GOOD))
-        return True
-
-    def _auto_calibrate(self):
-        """Sequential auto calibration: wait for each WASD press (digital
-        detection via MI_01), then sample its analog source."""
-        if self._calib_running:
-            log("calibrate ignored: already running", "WARN")
-            return
-        if not self.dkeys:
-            log("calibrate ignored: digital-keys interface unavailable", "WARN")
-            self._ui_queue_append(("notify",
-                                   "Calibration needs the digital-keys "
-                                   "interface (MI_01) — engine not fully up?", WARN))
-            return
-        self._calib_running = True
-        self.calib_btn.configure(state="disabled")
-        log("calibration started (interactive)")
-        def worker():
-            try:
-                seq = ["W", "A", "S", "D"]
-                for key in seq:
-                    if not self.running:
-                        break
-                    self._ui_queue_append(("notify", f"Hold {key} for 2s…", ACCENT2))
-                    # wait up to 10s for the key.  OS (GetAsyncKeyState) is
-                    # the primary detector (works on this board); MI_01 HID
-                    # is a secondary confirmation if it ever reports.
-                    t_wait = time.time()
-                    seen = False
-                    while time.time() - t_wait < 10 and self.running:
-                        os_ks = self.oskeys.poll()
-                        if self.dkeys and self.dkeys.opened:
-                            ks = self.dkeys.poll()
-                            if self.dkeys._conv is None and os_ks:
-                                self.dkeys.observe(os_ks)
-                        else:
-                            ks = set()
-                        if key in ks or key in os_ks:
-                            seen = True
-                            log(f"calibration: {key} detected "
-                                f"(hid={'Y' if key in ks else 'n'} "
-                                f"os={'Y' if key in os_ks else 'n'})")
-                            break
-                        time.sleep(0.005)
-                    if not seen:
-                        raw = self.dkeys._raw_reports[-6:] if self.dkeys else []
-                        raws = [bytes(r).hex() for r in raw]
-                        log(f"calibration: missed {key} (not pressed in 10s) "
-                            f"conv={getattr(self.dkeys, 'convention', None)} "
-                            f"raw_recent={raws}", "WARN")
-                        self._ui_queue_append(("notify", f"missed {key} — skipped", WARN))
-                        continue
-                    # baseline right after detection, sample while still held
-                    pre_hid, pre_ven, _pre_adc = self._peek_baseline()
-                    hid_max, ven_max, adc_peak = self._collect_spike(key, time.time(), 1.5)
-                    hid_rise = [max(0, h - p) for h, p in zip(hid_max, pre_hid)]
-                    ven_rise = {p2: max(0, v - pre_ven.get(p2, 0))
-                                for p2, v in ven_max.items()}
-                    ok = self._pick_source(key, hid_rise, ven_rise, adc_peak)
-                    if not ok:
-                        self._ui_queue_append(("notify", f"{key}: no analog source detected", WARN))
-                    time.sleep(0.4)
-                if self.running:
-                    self._ui_queue_append(("notify", "Calibration complete — mapping saved", GOOD))
-            except BaseException as e:
-                log_exception("calibration worker", e)
-            finally:
-                self._calib_running = False
-                self._ui_queue_append(("btn_state", "normal"))
-        threading.Thread(target=worker, daemon=True).start()
-
     def _calibrate_start(self):
-        if not self.running:
+        if not self._eng.running:
             log("calibrate requested but engine not running", "WARN")
             messagebox.showinfo("Slice Pad", "Start the engine first, then calibrate.")
             return
         log("calibrate button pressed")
-        self._auto_calibrate()
+        self._eng._calibrate_start()
 
     # ---------------- engine control ----------------
     def toggle_engine(self):
-        if not self.running:
-            self._start()
-        else:
+        if self._eng.running or self._eng._starting:
             self._stop()
+        else:
+            self._start()
 
     def _start(self):
-        log("engine start requested")
-        # find interfaces
-        ifs = find_interfaces()
-        log(f"interfaces found: {list(ifs)}")
-        if "vendor" not in ifs and "kbd" not in ifs:
-            log("keyboard not found", "ERROR")
-            messagebox.showerror("Slice Pad",
-                                 "Chilkey Slice75 HE (VID 0x1CA3 PID 0x0701) not found.\n"
-                                 "Is the keyboard connected over USB?")
-            return
-        self.vendor = None
-        self.hid = None
-        self.dkeys = None
-        if "vendor" in ifs:
-            self.vendor = VendorStream(ifs["vendor"])
-            if not self.vendor.open():
-                log("vendor interface open FAILED", "WARN")
-                self.vendor = None
-            else:
-                log(f"vendor interface opened ({ifs['vendor']!r})")
-        if "kbd" in ifs:
-            self.hid = HidAnalog(ifs["kbd"])
-            if self.hid.open():
-                log(f"hid-analog interface opened ({ifs['kbd']!r})")
-            else:
-                log("hid-analog interface open FAILED", "WARN")
-        if "keys" in ifs:
-            self.dkeys = DigitalKeys(ifs["keys"])
-            if self.dkeys.open():
-                log(f"digital-keys interface opened ({ifs['keys']!r})")
-            else:
-                log("digital-keys interface open FAILED", "WARN")
-        if self.vendor is None and (self.hid is None or not self.hid.opened):
-            log("no usable keyboard interfaces", "ERROR")
-            messagebox.showerror("Slice Pad",
-                                 "Could not open the keyboard interfaces.\n"
-                                 "Close the Chilkey web driver if it is running "
-                                 "(it holds the vendor HID interface).")
-            return
-        # if the vendor stream is up but we have no mapping yet, auto-calibrate
-        import os as _os
-        _skip_auto = _os.environ.get("SLICE_PAD_NO_AUTOCAL") == "1"
-        if (self.vendor and not self.mapping.vendor_pos) and not _skip_auto:
-            self._ui_queue_append(("notify",
-                                   "No key mapping found — running quick calibration…", ACCENT2))
-            log("no mapping found → starting auto-calibration")
-            self._auto_calibrate()
-        # bridge
-        self.bridge = GamepadBridge(self.cfg)
-        ok, msg = self.bridge.open()
-        # status
-        src = []
-        if self.vendor:
-            src.append(f"vendor:{self.vendor.fw_info or 'app'}")
-        if self.hid and self.hid.opened:
-            src.append("hid-analog")
-        self.engine_lbl.configure(text=f"running  ·  {', '.join(src)}", text_color=GOOD)
-        self.status_lbl.configure(text="● running", text_color=GOOD)
-        log(f"engine started: {' , '.join(src)}"
-            + ("" if ok else f"  [DRY-RUN: {msg}]"))
-        if not ok:
-            self.status_lbl.configure(text=f"● dry-run ({msg})", text_color=WARN)
-        self.start_btn.configure(text="■  Stop", fg_color=BAD, hover_color=BAD_HOVER)
-        self.running = True
-        self._stop_evt.clear()
-        self.engine = threading.Thread(target=self._engine_loop, daemon=True)
-        self.engine.start()
+        """GUI entry point: start the shared engine on a worker thread.
+        Interface-open takes ~1.4 s; button/labels update via _poll_ui from
+        the engine's live state, so the GUI never freezes."""
+        threading.Thread(target=self._eng.start, daemon=True).start()
 
     def _stop(self):
-        log("engine stop requested")
-        self.running = False
-        self._stop_evt.set()
-        try:
-            if self.engine:
-                self.engine.join(timeout=1.5)
-                self.engine = None
-        except Exception as e:
-            log_exception("engine join", e)
-        if self.bridge:
-            try:
-                self.bridge.close()
-            except Exception as e:
-                log_exception("bridge.close", e)
-            self.bridge = None
-        if self.vendor:
-            try:
-                self.vendor.close()
-            except Exception as e:
-                log_exception("vendor.close", e)
-            self.vendor = None
-        if self.hid:
-            try:
-                self.hid.close()
-            except Exception as e:
-                log_exception("hid.close", e)
-            self.hid = None
-        if self.dkeys:
-            try:
-                self.dkeys.close()
-            except Exception as e:
-                log_exception("dkeys.close", e)
-            self.dkeys = None
-        self.start_btn.configure(text="▶   Connect & Start", fg_color=ACCENT,
-                                 hover_color=ACCENT_HOVER)
-        self.engine_lbl.configure(text="disconnected", text_color=DIM)
-        self.status_lbl.configure(text="● idle", text_color=DIM)
-        log("engine stopped, interfaces released")
+        """GUI entry point: stop off the UI thread (join + close ~2 s)."""
+        threading.Thread(target=self._eng.stop, daemon=True).start()
 
-    def _engine_loop(self):
-        log("engine loop started (~1 kHz)")
-        polls = 0
+    def _stop_sync(self):
+        """Blocking stop for shutdown (window close)."""
         try:
-            while not self._stop_evt.is_set() and self.running:
-                polls += 1
-                try:
-                    # OS-level press watcher (ground truth for WASD)
-                    os_ks = self.oskeys.poll()
-                    # keep digital key state fresh (used by calibration)
-                    if self.dkeys and self.dkeys.opened:
-                        ks = self.dkeys.poll()
-                        # ground-truth confirmation of the HID bit convention
-                        if self.dkeys._conv is None and os_ks:
-                            self.dkeys.observe(os_ks)
-                    else:
-                        ks = set()
-                    # union: OS events are a reliable press signal too —
-                    # they come from the same hardware, so live auto-cal can
-                    # see the key even while the HID convention is still
-                    # settling.
-                    held = {k for k in ("W", "A", "S", "D")
-                            if (k in ks) or (k in os_ks)}
-                    self._live_autocal(held)
-                    self._refresh_baselines(held)
-                    # refresh the 6-byte HID analog block
-                    if self.hid and self.hid.opened:
-                        self.hid.poll()
-                    # pull analog values
-                    vals = {}
-                    for k in ("W", "A", "S", "D"):
-                        vals[k] = read_key_value(self.mapping, k, self.vendor, self.hid)
-                    # update UI queue (thread-safe, coalesced by _poll_ui)
-                    self._ui_queue_append(("keys", vals))
-                    # update gamepad
-                    if self.bridge:
-                        x16, y16 = self.bridge.update(vals["W"], vals["A"], vals["S"], vals["D"])
-                        self._ui_queue_append(("pad", (x16, y16,
-                                                       vals["W"], vals["A"], vals["S"], vals["D"])))
-                except BaseException as e:
-                    # never let one bad tick kill the engine; log + back off
-                    log_exception("engine tick", e)
-                    time.sleep(0.05)
-                    continue
-                time.sleep(0.001)  # ~1 kHz poll; bridge throttles pad.update()
-        finally:
-            log(f"engine loop finished after {polls} ticks", "INFO")
+            self._eng.stop()
+        except BaseException as e:
+            log_exception("engine stop (sync)", e)
 
     # ---------------- UI pump ----------------
     def _poll_ui(self):
@@ -1085,6 +697,7 @@ class App(ctk.CTk):
             self.mag_lbl.configure(
                 text=f"magnitude {self.bridge.magnitude:.2f}  ·  "
                      f"raw (pre-normalize) ghost shown hollow")
+        self._update_engine_ui()
         self._update_telemetry()
         try:
             self.after(40, self._poll_ui)
@@ -1092,33 +705,65 @@ class App(ctk.CTk):
             # window already destroyed (e.g. _on_close raced) — stop quietly
             log_exception("ui poll reschedule (window gone?)", e)
 
+    def _update_engine_ui(self):
+        """Reflect the shared engine's state on the button/labels.
+        Called from the UI thread every ~40 ms (diff-gated)."""
+        e = self._eng
+        if e.running:
+            srcs = []
+            if e.vendor:
+                srcs.append(f"vendor:{e.vendor.fw_info or 'app'}")
+            if e.hid and e.hid.opened:
+                srcs.append("hid")
+            lbl = "running  ·  " + (", ".join(srcs) if srcs else "standalone")
+            state = ("run", e.vendor.fw_info if e.vendor else "")
+            color = WARN if (e.vendor and e.vendor.stream_dead) else GOOD
+            if self._eng_ui_state != state:
+                self._eng_ui_state = state
+                self.engine_lbl.configure(text=lbl, text_color=color)
+                self.status_lbl.configure(text="● running", text_color=color)
+                self.start_btn.configure(text="■  Stop", fg_color=BAD,
+                                         hover_color=BAD_HOVER, state="normal")
+        elif e._starting:
+            if self._eng_ui_state != ("starting",):
+                self._eng_ui_state = ("starting",)
+                self.status_lbl.configure(text="● connecting…", text_color=ACCENT2)
+                self.start_btn.configure(state="disabled")
+        else:
+            if self._eng_ui_state != ("idle",):
+                self._eng_ui_state = ("idle",)
+                self.engine_lbl.configure(text="disconnected", text_color=FAINT)
+                self.status_lbl.configure(text="● idle", text_color=DIM)
+                self.start_btn.configure(text="▶   Connect & Start",
+                                         fg_color=ACCENT, hover_color=ACCENT_HOVER,
+                                         state="normal")
+
     def _update_telemetry(self):
+        e = self._eng
         parts = []
-        if self.running:
-            if self.vendor:
-                parts.append(f"vendor frames {self.vendor.frame_count}")
-                if self.vendor.stream_dead:
+        if e.running:
+            if e.vendor:
+                parts.append(f"vendor frames {e.vendor.frame_count}")
+                if e.vendor.stream_dead:
                     # firmware ADC task hung (control plane still answers).
                     # Surface a clear, actionable diagnostic.
                     parts.append("⚠ ADC STREAM DEAD — unplug & replug the keyboard")
-            if self.dkeys:
-                parts.append(f"keys conv={self.dkeys.convention} "
-                             f"hits={self.dkeys._conv_hits}")
-            parts.append(f"engine polls {self.stats['frames']}")
-            parts.append(f"cfg {self.cfg.normalize_mode}/{self.cfg.stick}")
-            if self.bridge and self.bridge.dry_run:
+                    self.status_lbl.configure(text="● ADC stream dead — replug USB",
+                                              text_color=WARN)
+            if e.dkeys:
+                parts.append(f"keys conv={e.dkeys.convention} "
+                             f"hits={e.dkeys._conv_hits}")
+            parts.append(f"engine polls {e.stats['polls']}")
+            parts.append(f"cfg {e.cfg.normalize_mode}/{e.cfg.stick}")
+            if e.bridge and e.bridge.dry_run:
                 parts.append("DRY-RUN (no virtual pad)")
-            # reflect the stream-dead state in the header status dot
-            if self.vendor and self.vendor.stream_dead:
-                self.status_lbl.configure(text="● ADC stream dead — replug USB",
-                                          text_color=WARN)
         else:
             parts.append("idle")
         self.tele_lbl.configure(text="\n".join(f"·  {p}" for p in parts))
 
     def _on_close(self):
         log("window close → shutting down")
-        self._stop()
+        self._stop_sync()
         try:
             self.destroy()
         except Exception as e:

@@ -26,11 +26,15 @@ if not ifs:
 app = appmod.App()
 app.withdraw()  # no visible window
 
-# start the engine (bypass GUI button)
+# start the shared engine (bypass the GUI button) — start() now runs on a
+# worker thread, so wait for the interface-open to settle.
 try:
-    app._start()
+    app._eng.start()
+    t_wait = time.time()
+    while not app._eng.running and time.time() - t_wait < 15:
+        time.sleep(0.05)
 except Exception as e:
-    fails.append(f"_start raised: {e}")
+    fails.append(f"engine.start raised: {e}")
 
 if not app.running:
     fails.append("engine did not start")
@@ -48,7 +52,7 @@ print(f"vendor frames in 4s: {vf}")
 stream_dead = app.vendor.stream_dead if app.vendor else False
 print(f"bridge dry_run: {app.bridge.dry_run if app.bridge else None}")
 print(f"fw info: {app.vendor.fw_info if app.vendor else None}")
-print(f"engine polls (ui frames): {app.stats['frames']}")
+print(f"engine polls (engine loop): {app.stats['polls']}")
 
 if stream_dead:
     # The firmware's RM6X21 (ADC) task can hang (e.g. after concurrent

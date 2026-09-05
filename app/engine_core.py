@@ -32,6 +32,18 @@ from applog import log, log_exception  # noqa: E402
 
 MAPPING_PATH = os.path.join(os.path.expanduser("~"), ".slice-pad", "mapping.json")
 
+# Win32 multimedia timer: requests 1 ms resolution for the engine's
+# ~1 kHz poll loop (time.sleep(0.001) otherwise rounds to the OS timer
+# period).  Restored on engine shutdown.  No effect on board traffic —
+# the vendor loop is round-trip-limited, not sleep-limited.
+_winmm = None
+if sys.platform == "win32":
+    try:
+        import ctypes
+        _winmm = ctypes.windll.winmm
+    except Exception:  # pragma: no cover
+        _winmm = None
+
 # palette constants (match app.py theme) so notify colors look the same
 GOOD = "#34d399"
 WARN = "#fbbf24"
@@ -417,9 +429,12 @@ class GamepadEngine:
                                    "close the Chilkey web driver if it is "
                                    "running (it holds the vendor HID).", BAD))
             return
-        # if the vendor stream is up but we have no mapping yet, auto-calibrate
+        # if the vendor stream is up but no ADC mapping exists yet,
+        # auto-calibrate.  (The old trigger checked `vendor_pos`, which a
+        # legacy HID calibration leaves non-empty — so it never fired and a
+        # truly fresh board would start with no mapping at all.)
         _skip_auto = os.environ.get("SLICE_PAD_NO_AUTOCAL") == "1"
-        if (self.vendor and not self.mapping.vendor_pos) and not _skip_auto:
+        if self.vendor and not self.mapping.adc_pos and not _skip_auto:
             self._ui_queue_append(("notify",
                                    "No key mapping found — running quick calibration…", ACCENT2))
             log("no mapping found → starting auto-calibration")
@@ -484,9 +499,20 @@ class GamepadEngine:
     def _engine_loop(self):
         log("engine loop started (~1 kHz)")
         polls = 0
+        _timer_on = False
         try:
+            if _winmm is not None:
+                try:
+                    if _winmm.timeBeginPeriod(1) == 0:
+                        _timer_on = True
+                except Exception:
+                    pass
             while not self._stop_evt.is_set() and self.running:
                 polls += 1
+                if polls % 250 == 0:
+                    # keep the live "engine polls" display current without
+                    # writing on every tick
+                    self.stats["polls"] = polls
                 try:
                     # OS-level press watcher (ground truth for WASD)
                     os_ks = self.oskeys.poll()
@@ -527,5 +553,10 @@ class GamepadEngine:
                     continue
                 time.sleep(0.001)  # ~1 kHz poll; bridge throttles pad.update()
         finally:
+            if _timer_on and _winmm is not None:
+                try:
+                    _winmm.timeEndPeriod(1)
+                except Exception:
+                    pass
             self.stats["polls"] = polls
             log(f"engine loop finished after {polls} ticks", "INFO")

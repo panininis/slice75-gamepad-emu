@@ -92,6 +92,13 @@ if x16 == 0 or y16 == 0:
 if abs(math.hypot(x16, y16) - int(32767)) > 2:
     failures.append(f"diagonal should map to unit circle, got {math.hypot(x16, y16)}")
 print(f"bridge math: OK (dry-run={br.dry_run}) diag16=({x16},{y16})")
+# release every virtual pad — unclosed VX360 pads hang the COM teardown at
+# process exit (the process lived on after SMOKE PASS).
+for _b in (br, br_c, br_c2):
+    try:
+        _b.close()
+    except Exception:
+        pass
 
 # 2) GUI instantiation
 import app as appmod

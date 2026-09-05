@@ -38,6 +38,7 @@ import struct
 import sys
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 try:
@@ -162,7 +163,7 @@ class VendorStream:
         self.adc: dict[int, int] = {}
         self.adc_alt: dict[int, int] = {}     # sub 5
         self.adc_raw: dict[int, int] = {}     # sub 11
-        self._adc_ring: dict[int, list[int]] = {}   # rolling raw history
+        self._adc_ring: dict[int, deque] = {}    # rolling raw history (maxlen-bounded)
         self._adc_base: dict[int, int] = {}         # rest baseline (ratchets up)
         self._ring_n: dict[int, int] = {}           # consecutive rest-near-max samples
         self._RING_LEN = 300               # ~1.2 s at 250 Hz/sensor
@@ -544,13 +545,12 @@ class VendorStream:
                     pos = base + i
                     v = cells[i]
                     self.adc[pos] = v
-                    ring = self._adc_ring.get(pos)
-                    if ring is None:
-                        self._adc_ring[pos] = [v]
-                    else:
-                        ring.append(v)
-                        if len(ring) > self._RING_LEN:
-                            ring.pop(0)
+                    # O(1) bounded ring: deque(maxlen) evicts the oldest
+                    # sample on append.  The old list.append + pop(0) was
+                    # O(n) (memmove of 300 pointers) per cell per frame —
+                    # ~50k memmoves/sec at 660 frames/s x 32 cells.
+                    self._adc_ring.setdefault(
+                        pos, deque(maxlen=self._RING_LEN)).append(v)
                 self.frame_count += 1
                 self._mark_adc_frame()
             elif sub == SUB_READ_MM:
