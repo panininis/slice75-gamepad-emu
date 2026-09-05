@@ -176,6 +176,28 @@ still blocked). **Verified:** 5-scenario guard unit test (start / double /
 racing-start / restart / racing-restart) + live INTEGRATION restart
 (181 → 301 frames/1 s, stream healthy).
 
+### 17. Experiment (REVERTED) — blocking `read(65, 8)` to kill the ADC spin
+
+Hypothesis: replacing the non-blocking busy-spin with a driver-parked
+blocking read (`hidapi` exposes `read(max_length, timeout_ms)`) would cut
+the ~1,000 wakeups/s. It doesn't help — and it's **structurally unsafe**:
+
+- **The board is a pure request/response sampler.** Frames arrive ~1 per
+  CMD-18 poll at the board's internal ~124 Hz. Pacing is *entirely
+  host-side*: the old loop's 8 ms window is what keeps us aligned to the
+  board's rate. A 1:1 write+blocking-read loop runs unthrottled at ~2.6 kHz
+  (measured **2,627 Hz** vs the native 120 Hz), CPU went **up** (21% vs
+  ~9% core) and the ADC task gets hammered at 20× rate on a
+  hang-prone task.
+- **A variant where the blocking read looped inside one window froze the
+  stream entirely** (`vendor_frames` stuck, watchdog starved because the
+  inner loop never returned) — caught in live verification, reverted.
+
+**Conclusion: the 8 ms windowed busy-spin is the protocol, not an
+optimization target.** The reader thread is at the floor. Verified after
+revert: 120 Hz, ~10% of a core over 15 s (short window; 8.9% is the 90 s
+steady number), `stream_dead=False`.
+
 ## Measured result
 
 Live web server (real HID + ViGEm pad, engine running):
