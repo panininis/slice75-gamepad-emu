@@ -291,11 +291,24 @@ class GamepadEngine:
         (verified during research — replugging or reopening the interface
         restores the 0x92 stream, settings retained).  stop() releases all
         three interfaces and start() reopens them, so an engine restart is
-        the same recovery without touching the USB cable."""
-        was_running = self.running
-        if was_running:
-            self.stop()
-        self.start()
+        the same recovery without touching the USB cable.
+
+        The `_starting` guard is held for the WHOLE recovery (including the
+        stop phase) so the UI stays in its "Connecting…" state and a racing
+        /api/start cannot fire a second start() concurrently — two
+        concurrent start()s would double-open the vendor interface and can
+        hang the board's ADC task."""
+        if self._starting:
+            log("engine restart ignored: start/restart already in progress", "WARN")
+            return
+        self._starting = True
+        log("engine restart requested (in-place ADC recovery)")
+        self.stop()
+        # stop() cleared the guard; re-assert it so the window between
+        # stop() and start() cannot be raced, then run start() with the
+        # guard bypassed (it clears the guard itself on success/failure).
+        self._starting = True
+        self.start(_from_restart=True)
 
     def _auto_calibrate(self):
         """Sequential auto calibration: wait for each WASD press (digital
@@ -382,12 +395,12 @@ class GamepadEngine:
         else:
             self.stop()
 
-    def start(self):
+    def start(self, _from_restart: bool = False):
         # idempotent: repeated clicks / double-taps are harmless
         if self.running:
             log("engine start ignored: already running", "WARN")
             return
-        if self._starting:
+        if self._starting and not _from_restart:
             log("engine start ignored: start already in progress", "WARN")
             return
         self._starting = True
