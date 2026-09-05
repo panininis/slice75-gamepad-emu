@@ -191,5 +191,8 @@ Live web server (real HID + ViGEm pad, engine running):
 
 ## Test status
 - SMOKE: **PASS** (exits 0)
+- LOGIC: **PASS** — `app/logic_test.py`, 30 hardware-free checks (ring cache,
+  `travel()` path, restart/start guard, config clamping, bridge math, curve
+  sandbox). Runs on any machine, no keyboard/ViGEm needed.
 - INTEGRATION: **PASS** on live hardware (W → y16=32767, parser trW=0.962,
   **restart recovery verified: fresh stream 182 → 303 frames/1 s**)

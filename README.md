@@ -116,7 +116,10 @@ app/
   gamepad_bridge.py virtual X360 pad, diagonal normalization, curves, deadzones
   mapping.json      adc_pos ground truth (W:44 A:62 S:63 D:64)
   smoke.py          GUI + math smoke test (no keys needed)
-  integration.py    end-to-end test (real HID + ViGEm)
+  logic_test.py     hardware-free logic tests (ring cache, restart guard,
+                    config clamping, bridge math) — runs anywhere, no HID
+  integration.py    end-to-end test (real HID + ViGEm, includes a live
+                    restart/recovery check)
   web/index.html    single-page dashboard (OLED black, no deps)
 run.bat  setup.bat  requirements.txt
 ```
