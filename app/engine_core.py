@@ -63,6 +63,7 @@ class GamepadEngine:
         self.engine: threading.Thread | None = None
         self._calib_running = False
         self._lc: dict = {}         # live auto-cal tracking: key -> state
+        self._stream_dead_notified = False  # edge state for one-shot notifies
         # pre-press baseline per key: {key: {"hid","ven","adc","t"}} —
         # refreshed by the engine loop while the key is NOT held, so
         # calibration scores *rise from baseline*.
@@ -512,6 +513,20 @@ class GamepadEngine:
                     # writing on every tick
                     self.stats["polls"] = polls
                 try:
+                    # one-shot stream-health notifications (edge-triggered):
+                    # "lost" when the watchdog trips, "restored" when frames
+                    # resume (e.g. after the in-place restart recovery).
+                    dead = bool(self.vendor and self.vendor.stream_dead)
+                    if dead != self._stream_dead_notified:
+                        self._stream_dead_notified = dead
+                        if dead:
+                            self._ui_queue_append(
+                                ("notify",
+                                 "ADC stream lost — use the engine button to recover",
+                                 BAD))
+                        else:
+                            self._ui_queue_append(
+                                ("notify", "ADC stream restored", GOOD))
                     # OS-level press watcher (ground truth for WASD)
                     os_ks = self.oskeys.poll()
                     # keep digital key state fresh (used by calibration)

@@ -46,6 +46,32 @@ CONFIG_KEYS = ("normalize_mode", "stick", "invert_x", "invert_y", "deadzone",
                "gain", "curve", "curve_expr", "stick_deadzone", "max_update_hz",
                "trigger_w", "digital_fallback")
 
+# allowed / clamped ranges per config key (also enforced by load_config on a
+# hand-edited config.json)
+def _clamp_cfg(k: str, v):
+    """Coerce + range-clamp one config value. Returns (ok, value)."""
+    if k in ("invert_x", "invert_y", "trigger_w", "digital_fallback"):
+        return True, bool(v)
+    if k == "max_update_hz":
+        try:
+            return True, max(1, min(1000, int(round(float(v)))))
+        except (TypeError, ValueError):
+            return False, None
+    if k in ("deadzone", "stick_deadzone"):
+        try:
+            return True, max(0.0, min(0.5, float(v)))
+        except (TypeError, ValueError):
+            return False, None
+    if k == "gain":
+        try:
+            return True, max(0.0, min(3.0, float(v)))
+        except (TypeError, ValueError):
+            return False, None
+    # normalize_mode / stick / curve / curve_expr: free strings — the engine
+    # degrades gracefully on unknown values (non-'off'/'diag' => full
+    # normalization, non-'left' stick => right, unknown curve => linear).
+    return True, str(v)
+
 
 def load_config() -> GamepadConfig:
     cfg = GamepadConfig()
@@ -55,7 +81,11 @@ def load_config() -> GamepadConfig:
                 d = json.load(f)
             for k, v in d.items():
                 if hasattr(cfg, k):
-                    setattr(cfg, k, v)
+                    ok, cv = _clamp_cfg(k, v)
+                    if ok:
+                        setattr(cfg, k, cv)
+                    else:
+                        log(f"config: bad {k}={v!r} — kept default", "WARN")
         except Exception as e:
             log(f"config load failed: {e}", "WARN")
     return cfg
@@ -279,19 +309,15 @@ class Handler(BaseHTTPRequestHandler):
         cfg = self.hub.cfg
         changed = False
         for k in CONFIG_KEYS:
-            if k in data:
-                v = data[k]
-                if k in ("invert_x", "invert_y", "trigger_w", "digital_fallback"):
-                    v = bool(v)
-                elif k == "max_update_hz":
-                    v = int(round(float(v)))
-                elif k in ("deadzone", "gain", "stick_deadzone"):
-                    v = float(v)
-                elif k in ("normalize_mode", "stick", "curve"):
-                    v = str(v)
-                if getattr(cfg, k, None) != v:
-                    setattr(cfg, k, v)
-                    changed = True
+            if k not in data:
+                continue
+            ok, v = _clamp_cfg(k, data[k])
+            if not ok:
+                self._json({"ok": False, "error": f"invalid {k}"}, 400)
+                return
+            if getattr(cfg, k, None) != v:
+                setattr(cfg, k, v)
+                changed = True
         if changed:
             save_config(cfg)
             # recompile curve if the expression or preset changed
