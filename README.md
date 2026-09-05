@@ -5,8 +5,12 @@ virtual **Xbox 360 (XInput)** gamepad stick, with **diagonal vector
 normalization** so moving diagonally (W+D) is not unnaturally fast.
 
 ```
-run.bat        start the app (GUI)
-setup.bat      one-time setup: venv + deps + ViGEmBus driver
+run.bat          start the app (web UI on http://127.0.0.1:8321)
+setup.bat        one-time setup: venv + deps + ViGEmBus driver
+requirements.txt pinned Python deps (hidapi, vgamepad, customtkinter)
+research_archive/  the protocol reverse-engineering scripts & captures
+                   (61 probes/recorders) — kept for reference, not part
+                   of the app
 ```
 
 ## What it does
@@ -52,7 +56,8 @@ setup.bat      one-time setup: venv + deps + ViGEmBus driver
 
 - Windows 10/11 x64, USB connection (not Bluetooth).
 - Python 3.10+ with [uv](https://docs.astral.sh/uv/) (or the bundled `.venv`).
-- `pip` packages: `hidapi`, `customtkinter`, `vgamepad`, `numpy`.
+- `pip` packages (see `requirements.txt`): `hidapi`, `vgamepad`,
+  `customtkinter` (GUI only).
 - **ViGEmBus** kernel driver (virtual gamepad bus) — installed by
   `setup.bat` from the MSI bundled with `vgamepad` (UAC prompt, no reboot).
 
@@ -98,15 +103,22 @@ HID interface map (VID `0x1CA3`, PID `0x0701`):
 
 ```
 app/
-  app.py            GUI + engine orchestration (customtkinter)
+  app.py            desktop GUI (customtkinter); drives the shared engine
+  app_web.py        web UI server (http://127.0.0.1:8321, SSE) — the
+                    default front-end via run.bat; also drives the shared
+                    engine, so both front-ends behave identically
+  engine_core.py    GamepadEngine — the shared WASD→gamepad engine (HID
+                    open, 1 kHz poll loop, live auto-cal, calibration
+                    wizard). UI-agnostic: GUI + web UI + tests all use it.
   applog.py         thread-safe logging (rotating file + console + crash hooks)
   slice_capture.py  HID access: vendor stream, HID analog block, digital keys,
                     vendor packet builder, mapping persistence
   gamepad_bridge.py virtual X360 pad, diagonal normalization, curves, deadzones
+  mapping.json      adc_pos ground truth (W:44 A:62 S:63 D:64)
   smoke.py          GUI + math smoke test (no keys needed)
   integration.py    end-to-end test (real HID + ViGEm)
-calib_test.py       concurrent engine+calibration stress test (crash repro)
-run.bat  setup.bat  calibrate.py (standalone ground-truth capture)
+  web/index.html    single-page dashboard (OLED black, no deps)
+run.bat  setup.bat  requirements.txt
 ```
 
 Settings & mappings persist in `~/.slice-pad/` (`config.json`, `mapping.json`).

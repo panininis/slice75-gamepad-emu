@@ -1,0 +1,22 @@
+# Slice Pad — runtime dependencies.
+# Install:  uv pip install -r requirements.txt
+#   (or:    .venv\Scripts\pip install -r requirements.txt)
+#
+# The one-time ViGEmBus kernel driver install (virtual Xbox 360 bus) is NOT a
+# Python package — run setup.bat, which drops the vgamepad MSI into the venv
+# and installs it.  Without the driver the app still runs but in "dry-run"
+# mode (computes the stick, registers no virtual pad).
+
+# Core HID access — reads the keyboard's vendor + analog interfaces.
+# Hard dependency: the app cannot read any sensor without it.
+hidapi==0.15.0
+
+# Virtual Xbox 360 pad (XInput) via ViGEm.  Optional at runtime — if missing
+# or the ViGEmBus driver is absent, GamepadBridge falls back to dry-run.
+# Needed for the virtual pad to actually be usable by games.
+vgamepad==0.1.0
+
+# Desktop (tkinter/customtkinter) GUI only (app/app.py).  The web UI
+# (app/app_web.py, the default via run.bat) does not import it, so a
+# headless/web-only install can skip this line.
+customtkinter==6.0.0

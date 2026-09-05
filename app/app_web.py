@@ -19,6 +19,7 @@ Config persists to ~\.slice-pad\config.json (same file as the desktop app).
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import queue
@@ -193,9 +194,13 @@ class Hub:
         self.state["config"] = {k: getattr(cfg, k) for k in CONFIG_KEYS}
 
     def snapshot(self) -> dict:
+        # Consistency snapshot: deep-copy under the lock, but do NOT hold
+        # the lock for json.dumps — the SSE loop calls this at 30 Hz and
+        # the engine's 1 kHz emit() blocks on this same lock, so serializing
+        # while holding it made the hot path wait for the network.
         with self.lock:
             self._refresh_derived()
-            return json.loads(json.dumps(self.state))  # deep copy under lock
+            return copy.deepcopy(self.state)
 
 
 # ------------------------------------------------------------------ handler
