@@ -25,24 +25,12 @@ if HERE not in sys.path:
 
 from slice_capture import (  # noqa: E402
     DigitalKeys, HidAnalog, Mapping, OsKeys, VendorStream,
-    find_interfaces, read_key_value,
+    find_interfaces, read_key_value, timer_res_begin, timer_res_end,
 )
 from gamepad_bridge import GamepadBridge  # noqa: E402
 from applog import log, log_exception  # noqa: E402
 
 MAPPING_PATH = os.path.join(os.path.expanduser("~"), ".slice-pad", "mapping.json")
-
-# Win32 multimedia timer: requests 1 ms resolution for the engine's
-# ~1 kHz poll loop (time.sleep(0.001) otherwise rounds to the OS timer
-# period).  Restored on engine shutdown.  No effect on board traffic —
-# the vendor loop is round-trip-limited, not sleep-limited.
-_winmm = None
-if sys.platform == "win32":
-    try:
-        import ctypes
-        _winmm = ctypes.windll.winmm
-    except Exception:  # pragma: no cover
-        _winmm = None
 
 # palette constants (match app.py theme) so notify colors look the same
 GOOD = "#34d399"
@@ -294,6 +282,20 @@ class GamepadEngine:
         self._ui_queue_append(("notify", f"{key} → {src}  (peak {val})", GOOD))
         return True
 
+    def restart(self):
+        """Full stop+start (thread-safe, worker-thread friendly).
+
+        This is the in-place recovery for a hung ADC stream: the firmware's
+        RM6X21 task revives when the vendor endpoint is released and reopened
+        (verified during research — replugging or reopening the interface
+        restores the 0x92 stream, settings retained).  stop() releases all
+        three interfaces and start() reopens them, so an engine restart is
+        the same recovery without touching the USB cable."""
+        was_running = self.running
+        if was_running:
+            self.stop()
+        self.start()
+
     def _auto_calibrate(self):
         """Sequential auto calibration: wait for each WASD press (digital
         detection via MI_01), then sample its analog source."""
@@ -497,16 +499,12 @@ class GamepadEngine:
 
     # ------------------------------------------------------------ engine loop
     def _engine_loop(self):
-        log("engine loop started (~1 kHz)")
+        log("engine loop started (~1 kHz active / ~125 Hz idle)")
         polls = 0
-        _timer_on = False
         try:
-            if _winmm is not None:
-                try:
-                    if _winmm.timeBeginPeriod(1) == 0:
-                        _timer_on = True
-                except Exception:
-                    pass
+            # 1 ms timer resolution for the sub-ms sleep pacing (shared,
+            # refcounted with the vendor ADC loop — no effect on traffic)
+            timer_res_begin()
             while not self._stop_evt.is_set() and self.running:
                 polls += 1
                 if polls % 250 == 0:
@@ -542,8 +540,11 @@ class GamepadEngine:
                     # emit analog values (coalesced by the UI)
                     self._ui_queue_append(("keys", vals))
                     # update gamepad
+                    active = bool(held)
                     if self.bridge:
                         x16, y16 = self.bridge.update(vals["W"], vals["A"], vals["S"], vals["D"])
+                        if x16 or y16:
+                            active = True
                         self._ui_queue_append(("pad", (x16, y16,
                                                        vals["W"], vals["A"], vals["S"], vals["D"])))
                 except BaseException as e:
@@ -551,12 +552,15 @@ class GamepadEngine:
                     log_exception("engine tick", e)
                     time.sleep(0.05)
                     continue
-                time.sleep(0.001)  # ~1 kHz poll; bridge throttles pad.update()
+                # Adaptive pacing: 1 ms while a key is held or the stick is
+                # off-center (interaction); otherwise drop to ~8 ms (the ADC
+                # frame rate — no new analog data can arrive faster, and an
+                # idle stick is 0 by definition).  A press is caught within
+                # one tick: <=1 ms while active, <=~8 ms from idle.  Idle
+                # CPU falls ~8x with no measurable hit to responsiveness
+                # (a native Xbox pad refreshes at ~64-125 Hz).
+                time.sleep(0.001 if active else 0.008)
         finally:
-            if _timer_on and _winmm is not None:
-                try:
-                    _winmm.timeEndPeriod(1)
-                except Exception:
-                    pass
+            timer_res_end()
             self.stats["polls"] = polls
             log(f"engine loop finished after {polls} ticks", "INFO")

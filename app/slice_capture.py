@@ -46,6 +46,55 @@ try:
 except ImportError:  # pragma: no cover
     hidapi = None
 
+# ---- Win32 1 ms timer resolution (refcounted) -------------------------------
+# time.sleep(x < 0.015) rounds to the ~15.6 ms OS timer period unless the
+# multimedia timer is raised to 1 ms.  Both the vendor ADC loop (sub-ms
+# read windows) and the engine poll loop (1 ms / 8 ms adaptive ticks) need
+# it; the refcount keeps it on while EITHER is running and restores the
+# system timer when both stop.  No effect on board traffic.
+_winmm = None
+if sys.platform == "win32":
+    try:
+        _winmm = ctypes.windll.winmm
+    except Exception:  # pragma: no cover
+        _winmm = None
+_timer_lock = threading.Lock()
+_timer_refs = 0
+
+
+def timer_res_begin() -> bool:
+    """Request 1 ms timer resolution (refcounted).  Returns True on the
+    first reference (the one that actually called timeBeginPeriod)."""
+    global _timer_refs
+    if _winmm is None:
+        return False
+    with _timer_lock:
+        _timer_refs += 1
+        first = _timer_refs == 1
+    if first:
+        try:
+            _winmm.timeBeginPeriod(1)
+        except Exception:  # pragma: no cover
+            pass
+    return first
+
+
+def timer_res_end() -> bool:
+    """Release one reference.  Returns True on the last one (the one that
+    actually called timeEndPeriod)."""
+    global _timer_refs
+    if _winmm is None:
+        return False
+    with _timer_lock:
+        _timer_refs = max(0, _timer_refs - 1)
+        last = _timer_refs == 0
+    if last:
+        try:
+            _winmm.timeEndPeriod(1)
+        except Exception:  # pragma: no cover
+            pass
+    return last
+
 VID = 0x1CA3
 PID = 0x0701
 
@@ -166,6 +215,9 @@ class VendorStream:
         self._adc_ring: dict[int, deque] = {}    # rolling raw history (maxlen-bounded)
         self._adc_base: dict[int, int] = {}         # rest baseline (ratchets up)
         self._ring_n: dict[int, int] = {}           # consecutive rest-near-max samples
+        self._ring_gen: dict[int, int] = {}         # per-sensor sample generation
+        self._ring_max_gen: dict[int, int] = {}     # gen the cached max() is valid for
+        self._ring_max: dict[int, int] = {}         # cached max(ring) — O(300) only on new sample
         self._RING_LEN = 300               # ~1.2 s at 250 Hz/sensor
         self.fw_info: str = ""
         self.frame_count = 0
@@ -223,6 +275,9 @@ class VendorStream:
         ]
         for t in self._threads:
             t.start()
+        # the ADC loop uses sub-ms read windows — 1 ms timer resolution
+        # (refcounted; shared with the engine poll loop)
+        timer_res_begin()
         return True
 
     def snapshot(self) -> dict[int, int]:
@@ -255,6 +310,7 @@ class VendorStream:
             if t.is_alive():
                 t.join(timeout=0.6)
         self._threads = []
+        timer_res_end()
         if self._dev is not None:
             # NOTE: we do NOT send save_adjusting (CMDOrder 13) on close.
             # We never start an adjusting session (start_adjusting), so an
@@ -551,6 +607,7 @@ class VendorStream:
                     # ~50k memmoves/sec at 660 frames/s x 32 cells.
                     self._adc_ring.setdefault(
                         pos, deque(maxlen=self._RING_LEN)).append(v)
+                    self._ring_gen[pos] = self._ring_gen.get(pos, 0) + 1
                 self.frame_count += 1
                 self._mark_adc_frame()
             elif sub == SUB_READ_MM:
@@ -559,6 +616,22 @@ class VendorStream:
                     v = cells[i]
                     if v:
                         self.mm[pos] = v
+
+    def _ring_max_cached(self, pos: int) -> int:
+        """max() over the rolling ring, recomputed only when a new sample
+        for `pos` lands (gen counter bumped in _process_92).  The engine
+        calls travel() ~4x per tick at ~1 kHz, but the ring only changes
+        at the ~124 Hz ADC frame rate — without this cache every call
+        re-scanned all 300 samples (~1.2M comparisons/s wasted)."""
+        ring = self._adc_ring.get(pos)
+        if not ring:
+            return 0
+        gen = self._ring_gen.get(pos, 0)
+        if self._ring_max_gen.get(pos) != gen:
+            m = max(ring)
+            self._ring_max[pos] = m
+            self._ring_max_gen[pos] = gen
+        return self._ring_max[pos]
 
     def travel(self, pos: int) -> float:
         """Normalized 0..1 analog travel for a sensor position.
@@ -587,7 +660,7 @@ class VendorStream:
                 self._adc_base[pos] = sorted(ring)[len(ring) // 2]
                 self._ring_n[pos] = 0
                 return 0.0
-            if raw >= max(ring) - 15:
+            if raw >= self._ring_max_cached(pos) - 15:
                 self._ring_n[pos] = self._ring_n.get(pos, 0) + 1
             else:
                 self._ring_n[pos] = 0

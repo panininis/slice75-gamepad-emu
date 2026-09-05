@@ -478,18 +478,6 @@ function drawStick(){
   sx.moveTo(CX-R,CY); sx.lineTo(CX+R,CY);
   sx.strokeStyle = "rgba(148,163,184,.08)"; sx.stroke();
   const p = state.pad;
-  // raw ghost (pre-normalization) — dashed, subtle.
-  // Safety-clamp to the true raw max (√2) — the pad ring (R=154) is sized so
-  // even a full diagonal (1.414·R) stays inside the canvas and never vanishes.
-  if (Math.abs(p.gx) > 0.02 || Math.abs(p.gy) > 0.02){
-    let grx = Math.max(-1,Math.min(1,p.gx)), gry = Math.max(-1,Math.min(1,p.gy));
-    const gm = Math.hypot(grx, gry), GMAX = Math.SQRT2;
-    if (gm > GMAX){ grx /= gm; gry /= gm; }
-    const gx = CX + grx*R, gy = CY - gry*R;
-    sx.beginPath(); sx.arc(gx,gy,8,0,Math.PI*2);
-    sx.setLineDash([4,4]); sx.strokeStyle = "rgba(120,135,160,.4)"; sx.lineWidth = 1.2; sx.stroke();
-    sx.setLineDash([]);
-  }
   const bx = CX + p.x*R, by = CY - p.y*R;
   sx.save();
   sx.shadowColor = "rgba(34,211,238,.9)"; sx.shadowBlur = 22;
@@ -500,6 +488,19 @@ function drawStick(){
   sx.strokeStyle = "#22d3ee"; sx.lineWidth = 2; sx.stroke();
   sx.beginPath(); sx.arc(bx-2.6,by-2.6,3,0,Math.PI*2);
   sx.fillStyle = "#dbeafe"; sx.fill();
+  // raw ghost (pre-normalization) — dashed, drawn ON TOP of the ball so the
+  // 0.02 stick-deadzone gap is visible instead of hidden under the glow.
+  // Safety-clamp to the true raw max (√2) — the pad ring (R=154) is sized so
+  // even a full diagonal (1.414·R) stays inside the canvas and never vanishes.
+  if (Math.abs(p.gx) > 0.02 || Math.abs(p.gy) > 0.02){
+    let grx = Math.max(-1,Math.min(1,p.gx)), gry = Math.max(-1,Math.min(1,p.gy));
+    const gm = Math.hypot(grx, gry), GMAX = Math.SQRT2;
+    if (gm > GMAX){ grx /= gm; gry /= gm; }
+    const gx = CX + grx*R, gy = CY - gry*R;
+    sx.beginPath(); sx.arc(gx,gy,8,0,Math.PI*2);
+    sx.setLineDash([4,4]); sx.strokeStyle = "rgba(148,163,184,.55)"; sx.lineWidth = 1.2; sx.stroke();
+    sx.setLineDash([]);
+  }
   // keycap chips at the cardinal spots (W top / A left / S bottom / D right):
   // lit by RAW key travel (always matches the bars), the ball shows the real
   // (normalized, possibly inverted) stick position. Clear of the ring (R=154).

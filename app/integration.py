@@ -85,6 +85,34 @@ if app.bridge and not app.bridge.dry_run:
     if abs(x16) > 10 or abs(y16) > 10:
         fails.append(f"all-keys should be neutral: ({x16},{y16})")
 
+# restart check: full stop+start must revive the vendor stream (this is the
+# in-place recovery for a hung ADC task — reopening the endpoint revives it).
+# NOTE: the restarted engine owns a FRESH VendorStream (frame_count starts at
+# 0), so compare the new instance's OWN counter advancing, vs the old one.
+try:
+    app._eng.restart()
+    t_wait = time.time()
+    while not app._eng.running and time.time() - t_wait < 15:
+        time.sleep(0.05)
+    time.sleep(1.5)
+    new_vendor = app.vendor
+    f1 = new_vendor.frame_count
+    time.sleep(1.0)
+    f2 = new_vendor.frame_count
+    dead = bool(new_vendor.stream_dead)
+    if not app._eng.running:
+        fails.append("engine.restart() did not bring the engine back up")
+    elif f2 <= f1:
+        fails.append(f"engine.restart(): new vendor stream not advancing "
+                     f"({f1} -> {f2})")
+    elif dead:
+        fails.append("engine.restart(): new vendor stream reports dead")
+    else:
+        print(f"restart ok: engine back up, fresh vendor stream {f1} -> {f2} "
+              f"frames in 1 s, stream healthy")
+except Exception as e:
+    fails.append(f"engine.restart() raised: {e}")
+
 app._stop()
 app.update()
 time.sleep(0.3)
