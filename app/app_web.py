@@ -174,7 +174,7 @@ class Hub:
             dead = bool(e.vendor and e.vendor.stream_dead)
             self.state["stream_dead"] = dead
             if dead:
-                self.state["status"], self.state["status_color"] = "ADC stream dead — replug USB", WARN
+                self.state["status"], self.state["status_color"] = "ADC stream dead — click engine button to recover", WARN
             elif self.state.get("dry_run"):
                 self.state["status"], self.state["status_color"] = "dry-run", WARN
             else:
@@ -250,6 +250,11 @@ class Handler(BaseHTTPRequestHandler):
         elif p == "/api/stop":
             threading.Thread(target=self.hub.engine.stop, daemon=True).start()
             self._json({"ok": True, "note": "stop requested"})
+        elif p == "/api/restart":
+            # in-place recovery for a hung ADC stream (reopening the vendor
+            # endpoint revives the firmware's RM6X21 task — no USB replug)
+            threading.Thread(target=self.hub.engine.restart, daemon=True).start()
+            self._json({"ok": True, "note": "restart requested"})
         elif p == "/api/calibrate":
             threading.Thread(target=self.hub.engine._calibrate_start, daemon=True).start()
             self._json({"ok": True})

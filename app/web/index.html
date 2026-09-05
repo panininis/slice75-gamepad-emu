@@ -107,6 +107,8 @@
   button.primary{background:var(--accent);border:none}
   button.primary:hover{background:#9d6ff5}
   button.danger{background:var(--bad);border:none}
+  button.recover{background:#b45309;border:none}
+  button.recover:hover{background:#d97706}
   /* segmented */
   .seg{display:inline-flex;background:rgba(0,0,0,.5);border:1px solid var(--border);
     border-radius:9px;padding:3px;gap:3px}
@@ -411,9 +413,17 @@ function apply(s){
   $("#dot").style.color = state.statusColor;
   $("#dot").style.background = state.statusColor;
   const be = $("#btnEngine");
-  if (state.running){ be.textContent = "Stop"; be.className = "danger"; be.disabled = false; }
+  if (state.running){
+    if (state.streamDead){
+      // one-click recovery: full stop+start reopens the vendor endpoint,
+      // which revives the firmware's RM6X21 task — no USB replug needed
+      be.textContent = "Recover ADC Stream"; be.className = "recover grow"; be.disabled = false;
+    } else {
+      be.textContent = "Stop"; be.className = "danger grow"; be.disabled = false;
+    }
+  }
   else if (state.starting){ be.textContent = "Connecting…"; be.className = ""; be.disabled = true; }
-  else { be.textContent = "Connect & Start"; be.className = "primary"; be.disabled = false; }
+  else { be.textContent = "Connect & Start"; be.className = "primary grow"; be.disabled = false; }
   $("#btnCalib").disabled = !state.running || state.calibRunning;
   if (wasRunning !== state.running)
     toast(state.running ? "engine started" : "engine stopped",
@@ -425,12 +435,12 @@ function apply(s){
         "cfg            " + (state.config.normalize_mode||"?") + "/" + (state.config.stick||"?") + "\n" +
         (state.fw ? "fw             " + state.fw + "\n" : "") +
         (state.dryRun ? "DRY-RUN (no virtual pad)\n" : "") +
-        (state.streamDead ? "⚠ ADC STREAM DEAD — unplug & replug\n" : "");
+        (state.streamDead ? "⚠ ADC STREAM DEAD — click the engine button to recover" + "\n" : "");
   } else t = "idle";
   if (t !== lastTele){
     lastTele = t;
     $("#tele").innerHTML = t
-      .replace(/⚠ ADC STREAM DEAD.*/,"<span class='bad'>⚠ ADC STREAM DEAD — unplug & replug</span>")
+      .replace(/⚠ ADC STREAM DEAD.*/,"<span class='bad'>⚠ ADC STREAM DEAD — click the engine button to recover</span>")
       .replace(/^idle$/,"<span class='ok'>idle</span>");
   }
   for (const n of (s.notifs || []))
@@ -574,9 +584,16 @@ function frame(){
 /* ---------------- boot ---------------- */
 $("#btnEngine").onclick = async () => {
   if (state.starting) return;
-  const next = !state.running;
   const be = $("#btnEngine");
-  if (next){ be.textContent = "Connecting…"; be.className = ""; be.disabled = true; }
+  // one-click ADC recovery: engine running but the stream is dead
+  if (state.running && state.streamDead){
+    be.textContent = "Recovering…"; be.className = "grow"; be.disabled = true;
+    const r = await api("/api/restart");
+    if (r && r.error) toast(r.error, "#fb7185");
+    return;
+  }
+  const next = !state.running;
+  if (next){ be.textContent = "Connecting…"; be.className = "grow"; be.disabled = true; }
   const r = await api(next ? "/api/start" : "/api/stop");
   if (r && r.error) toast(r.error, "#fb7185");
 };

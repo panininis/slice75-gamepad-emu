@@ -7,3 +7,5 @@ ui_shot.png
 research/
 web_*.log
 app_run_*.log
+cpu_sample.ps1
+js_check.js
