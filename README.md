@@ -169,9 +169,27 @@ Settings & mappings persist in `~/.slice-pad/` (`config.json`, `mapping.json`).
 
 ## Thread-safety
 
-The 1 kHz engine loop, the calibration worker, and the UI thread share the
-keyboard HID handles. All shared state is protected: each HID device is
-read under its own lock, the vendor travel matrix and the 6-byte analog
-block are consumed via thread-safe `snapshot()` copies, and the UI queue is
-lock-guarded. Calibration scores the *rise from a pre-press baseline*, so a
-key's leftover travel value can never be mis-attributed to another key.
+The adaptive-rate engine loop (1 kHz while active, ~125 Hz when idle), the
+calibration worker, and the UI thread share the keyboard HID handles. All
+shared state is protected: each HID device is read under its own lock, the
+vendor travel matrix and the 6-byte analog block are consumed via
+thread-safe `snapshot()` copies, and the UI queue is lock-guarded.
+Calibration scores the *rise from a pre-press baseline*, so a key's leftover
+travel value can never be mis-attributed to another key.
+
+## Testing
+
+Three tiers, all exit 0 on success:
+
+```
+.venv\Scripts\python.exe -B app\logic_test.py     # 30 hardware-free checks
+.venv\Scripts\python.exe -B app\smoke.py          # GUI + math (no keys)
+.venv\Scripts\python.exe -B app\integration.py    # live HID + ViGEm (keyboard attached)
+```
+
+`logic_test.py` needs **no keyboard and no ViGEm** — it exercises the pure
+logic (ring cache, `travel()`, the restart/start guard, config clamping,
+bridge math, the curve sandbox), so it is the tier to run after any edit to
+the engine/bridge/capture code. `integration.py` additionally verifies the
+live vendor stream, the forced-stick round-trip, and the in-place
+restart/recovery path.
