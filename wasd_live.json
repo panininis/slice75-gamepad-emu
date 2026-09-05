@@ -1,0 +1,31 @@
+{
+  "table": {
+    "W": {
+      "os_ticks": 0,
+      "peak_travel": 0.0,
+      "confirmed": false,
+      "adc_pos": 35
+    },
+    "A": {
+      "os_ticks": 0,
+      "peak_travel": 0.0,
+      "confirmed": false,
+      "adc_pos": 30
+    },
+    "S": {
+      "os_ticks": 0,
+      "peak_travel": 0.0,
+      "confirmed": false,
+      "adc_pos": 31
+    },
+    "D": {
+      "os_ticks": 0,
+      "peak_travel": 0.0,
+      "confirmed": false,
+      "adc_pos": 32
+    }
+  },
+  "os_any": 0,
+  "max_mag": 0.0,
+  "events": []
+}

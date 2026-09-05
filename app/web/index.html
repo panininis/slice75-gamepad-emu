@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Slice Pad · WASD → Xbox 360</title>
+<style>
+  :root{
+    --bg:#000;
+    --panel:rgba(7,9,15,.45);
+    --panel2:rgba(2,3,6,.72);
+    --border:rgba(148,163,184,.10);
+    --border-hi:rgba(148,163,184,.24);
+    --text:#e8edf4;
+    --dim:#8b95a7;
+    --faint:#5b6474;
+    --accent:#8b5cf6;
+    --accent2:#22d3ee;
+    --good:#34d399;
+    --warn:#fbbf24;
+    --bad:#fb7185;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:"Segoe UI Variable","Segoe UI",system-ui,sans-serif;
+    color:var(--text);
+    background:var(--bg);
+    overflow:hidden;
+    position:relative;
+  }
+  .glass{
+    background:var(--panel);
+    border:1px solid var(--border);
+    border-radius:14px;
+  }
+  /* ---------- top bar ---------- */
+  #topbar{
+    position:relative;z-index:2;
+    display:flex;align-items:center;gap:10px;
+    height:46px;padding:0 14px;
+    background:rgba(0,0,0,.88);
+    border-bottom:1px solid var(--border);
+  }
+  #topbar .logo{color:var(--accent2);font-size:15px;font-weight:700}
+  #topbar .name{font-size:12.5px;font-weight:600;color:var(--dim);letter-spacing:.2px}
+  #topbar .ver{font-size:10px;color:var(--faint);font-family:Consolas,monospace}
+  .pill{
+    margin-left:auto;
+    display:flex;align-items:center;gap:7px;
+    font-size:11.5px;font-weight:600;color:var(--dim);
+    background:rgba(0,0,0,.62);border:1px solid var(--border);
+    padding:5px 12px;border-radius:999px;
+  }
+  .pill .dot{width:7px;height:7px;border-radius:50%;background:var(--faint)}
+  /* ---------- layout ---------- */
+  #main{
+    position:relative;z-index:1;
+    display:grid;grid-template-columns:minmax(300px,5fr) 7fr;gap:12px;
+    height:calc(100% - 46px);padding:12px;
+  }
+  #left{display:flex;flex-direction:column;gap:12px;min-height:0}
+  #stickCard{flex:1;min-height:0;display:flex;flex-direction:column;padding:10px}
+  #stickCard .cap{font-size:10.5px;font-weight:700;letter-spacing:1.4px;
+    color:var(--faint);text-transform:uppercase;padding:2px 4px 8px}
+  #stickWrap{flex:1;min-height:0;display:flex;align-items:center;justify-content:center}
+  #stick{max-width:100%;max-height:100%;aspect-ratio:1;border-radius:50%;
+    clip-path:circle(50% at 50% 50%)}
+  #magLine{font-size:11px;color:var(--faint);font-family:Consolas,monospace;
+    text-align:right;padding:6px 4px 0}
+  /* ---------- bars ---------- */
+  #bars{display:flex;flex-direction:column;gap:8px}
+  .bar{
+    display:grid;grid-template-columns:34px 1fr 46px;align-items:center;gap:10px;
+    padding:8px 12px;
+  }
+  .bar .cap{
+    width:34px;height:30px;display:flex;align-items:center;justify-content:center;
+    font-size:13px;font-weight:700;color:var(--accent2);
+    background:var(--panel2);border:1px solid var(--border);border-radius:8px;
+  }
+  .bar .track{height:8px;border-radius:4px;background:rgba(148,163,184,.12);overflow:hidden}
+  .bar .fill{height:100%;width:0%;border-radius:4px;
+    background:var(--accent2);
+    transition:width .06s linear}
+  .bar .val{font-family:Consolas,monospace;font-size:12px;color:var(--dim);text-align:right}
+  /* ---------- right: ONE panel ---------- */
+  #panel{overflow-y:auto;display:flex;flex-direction:column;padding:0;min-height:0}
+  #panel::-webkit-scrollbar{width:8px}
+  #panel::-webkit-scrollbar-thumb{background:rgba(148,163,184,.18);border-radius:4px}
+  .sec{padding:12px 16px}
+  .sec + .sec{border-top:1px solid var(--border)}
+  .sec h3{font-size:10.5px;font-weight:700;letter-spacing:1.4px;color:var(--faint);
+    text-transform:uppercase;margin-bottom:10px}
+  .row{display:flex;align-items:center;gap:10px}
+  .row + .row{margin-top:8px}
+  .grow{flex:1}
+  .hint{font-size:10.5px;color:var(--faint);margin-top:7px}
+  /* buttons */
+  button{
+    font-family:inherit;font-size:12.5px;font-weight:600;color:var(--text);
+    background:var(--panel2);border:1px solid var(--border);border-radius:9px;
+    padding:8px 14px;cursor:pointer;transition:background .15s,border-color .15s;
+  }
+  button:hover{border-color:var(--border-hi);background:rgba(30,41,59,.7)}
+  button:disabled{opacity:.5;cursor:default}
+  button.primary{background:var(--accent);border:none}
+  button.primary:hover{background:#9d6ff5}
+  button.danger{background:var(--bad);border:none}
+  /* segmented */
+  .seg{display:inline-flex;background:rgba(0,0,0,.5);border:1px solid var(--border);
+    border-radius:9px;padding:3px;gap:3px}
+  .seg button{background:transparent;border:none;border-radius:6px;padding:5px 12px;
+    color:var(--dim);font-size:12px;transition:all .12s}
+  .seg button.on{background:var(--accent);
+    color:#fff;font-weight:600}
+  /* sliders */
+  .srow{display:grid;grid-template-columns:120px 1fr 52px;align-items:center;gap:10px}
+  .srow + .srow{margin-top:10px}
+  .srow label{font-size:12px;color:var(--dim)}
+  .srow .v{font-family:Consolas,monospace;font-size:12px;color:var(--accent2);text-align:right}
+  input[type=range]{-webkit-appearance:none;width:100%;height:6px;border-radius:3px;
+    background:rgba(148,163,184,.15);outline:none;cursor:pointer}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:15px;height:15px;
+    border-radius:50%;background:var(--accent2);border:2px solid #0b1220;cursor:pointer}
+  .scale{display:flex;justify-content:space-between;font-size:9.5px;color:var(--faint);
+    font-family:Consolas,monospace;padding:2px 2px 0}
+  /* toggles */
+  .tgl{display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;
+    font-size:12.5px;color:var(--text)}
+  .tgl + .tgl{margin-top:9px}
+  .tgl .sw{width:34px;height:19px;border-radius:999px;background:rgba(148,163,184,.2);
+    border:1px solid var(--border);position:relative;transition:all .18s;flex:none}
+  .tgl .sw::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;
+    border-radius:50%;background:var(--faint);transition:all .18s}
+  .tgl.on .sw{background:var(--accent)}
+  .tgl.on .sw::after{left:17px;background:#fff}
+  /* curve */
+  #curveWrap{border:1px solid var(--border);border-radius:10px;
+    padding:10px;margin-top:10px}
+  #curveWrap .cap{font-size:10.5px;font-weight:700;letter-spacing:1.2px;color:var(--faint);
+    text-transform:uppercase;margin-bottom:8px}
+  #curveWrap select{
+    width:100%;font-family:inherit;font-size:12px;color:var(--text);
+    background:rgba(7,9,13,.7);border:1px solid var(--border);border-radius:7px;
+    padding:6px 8px;outline:none;cursor:pointer;margin-bottom:8px}
+  #curveWrap canvas{width:100%;height:96px;display:block}
+  #curveErr{font-size:11px;color:var(--bad);margin-top:5px;min-height:14px}
+  /* telemetry */
+  #tele{font-family:Consolas,monospace;font-size:11.5px;color:var(--dim);
+    line-height:1.7;white-space:pre-line}
+  #tele .bad{color:var(--bad);font-weight:700}
+  #tele .ok{color:var(--good)}
+  /* toasts */
+  #toasts{position:fixed;right:14px;bottom:14px;z-index:5;display:flex;
+    flex-direction:column;gap:8px;pointer-events:none}
+  .toast{font-size:12px;padding:9px 14px;border-radius:10px;max-width:340px;
+    background:rgba(10,13,20,.96);border:1px solid var(--border);
+    animation:tin .25s ease;transition:opacity .5s}
+  .toast.out{opacity:0}
+  @keyframes tin{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}
+</style>
+</head>
+<body>
+  <div id="topbar">
+    <span class="pill" id="pill"><span class="dot" id="dot"></span><span id="statusTxt">idle</span></span>
+  </div>
+
+  <div id="main">
+    <!-- left: stick + bars -->
+    <div id="left">
+      <div id="stickCard" class="glass">
+        <div class="cap">Stick · left</div>
+        <div id="stickWrap"><canvas id="stick" width="460" height="460"></canvas></div>
+        <div id="magLine">magnitude 0.00</div>
+      </div>
+      <div id="bars">
+        <div class="bar glass" data-k="W"><div class="cap">W</div><div class="track"><div class="fill"></div></div><div class="val">0</div></div>
+        <div class="bar glass" data-k="A"><div class="cap">A</div><div class="track"><div class="fill"></div></div><div class="val">0</div></div>
+        <div class="bar glass" data-k="S"><div class="cap">S</div><div class="track"><div class="fill"></div></div><div class="val">0</div></div>
+        <div class="bar glass" data-k="D"><div class="cap">D</div><div class="track"><div class="fill"></div></div><div class="val">0</div></div>
+      </div>
+    </div>
+
+    <!-- right: ONE glass panel, sections divided by hairlines -->
+    <div id="panel" class="glass">
+      <div class="sec">
+        <h3>Engine</h3>
+        <div class="row">
+          <button id="btnEngine" class="primary grow">Connect &amp; Start</button>
+        </div>
+      </div>
+
+      <div class="sec">
+        <h3>Key Calibration</h3>
+        <div class="row">
+          <button id="btnCalib" class="grow">Calibrate now — hold each key 2 s</button>
+        </div>
+        <div class="hint">Auto-detects the analog source while running — hold a key briefly and it maps itself.</div>
+      </div>
+
+      <div class="sec">
+        <h3>Diagonal Normalization</h3>
+        <div class="seg" id="segNorm" style="flex:none">
+          <button data-v="full" class="on">Full vector</button>
+          <button data-v="diag">Diagonal</button>
+          <button data-v="off">Off</button>
+        </div>
+        <div class="hint">Full vector scales the stick to the circle on diagonals (W+A hard = 1.0, not 1.41).</div>
+      </div>
+
+      <div class="sec">
+        <h3>Per-Key Shaping</h3>
+        <div class="srow"><label>Deadzone</label><input type="range" id="slDead" min="0" max="0.5" step="0.01"><span class="v" id="vDead"></span>
+          <div class="scale" style="grid-column:2 / 3"><span>0.00</span><span>0.50</span></div></div>
+        <div class="srow"><label>Gain</label><input type="range" id="slGain" min="0.1" max="3" step="0.05"><span class="v" id="vGain"></span>
+          <div class="scale" style="grid-column:2 / 3"><span>0.10</span><span>3.00</span></div></div>
+        <div id="curveWrap">
+          <div class="cap">Response curve · f(v), v = 0..1 travel</div>
+          <select id="curvePreset"></select>
+          <canvas id="curvePlot" width="520" height="96"></canvas>
+          <div id="curveErr"></div>
+        </div>
+      </div>
+
+      <div class="sec">
+        <h3>Stick</h3>
+        <div class="row">
+          <div class="seg" id="segStick" style="flex:none">
+            <button data-v="left" class="on">Left stick</button>
+            <button data-v="right">Right stick</button>
+          </div>
+          <div class="srow grow" style="margin:0">
+            <label>Stick deadzone</label>
+            <input type="range" id="slStickDz" min="0" max="0.5" step="0.01">
+            <span class="v" id="vStickDz"></span>
+            <div class="scale" style="grid-column:2 / 3"><span>0.00</span><span>0.50</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sec">
+        <h3>Options</h3>
+        <div class="tgl" id="tglInvX"><div class="sw"></div>Invert X axis</div>
+        <div class="tgl" id="tglInvY"><div class="sw"></div>Invert Y axis</div>
+        <div class="tgl" id="tglTrig"><div class="sw"></div>Drive triggers with W/S (0–255)</div>
+        <div class="srow" style="margin-top:12px">
+          <label>Max update rate (Hz)</label>
+          <input type="range" id="slHz" min="30" max="1000" step="10">
+          <span class="v" id="vHz"></span>
+          <div class="scale" style="grid-column:2 / 3"><span>30</span><span>1000</span></div>
+        </div>
+      </div>
+
+      <div class="sec">
+        <h3>Telemetry</h3>
+        <div id="tele">connecting…</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toasts"></div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const state = {
+  running:false, starting:false, status:"idle", statusColor:"#8b95a7",
+  engineLbl:"disconnected", fw:"", vendorFrames:0, streamDead:false,
+  dryRun:false, polls:0, calibRunning:false,
+  keys:{W:0,A:0,S:0,D:0},
+  pad:{x:0,y:0,gx:0,gy:0,mag:0},
+  config:{},
+};
+let curveFn = v => v;
+let lastCurveExpr = "";
+
+const PRESETS = [
+  ["linear","v"],["squared","v**2"],["cubic","v**3"],["sqrt","sqrt(v)"],
+  ["inverse sqrt","1 - sqrt(1 - v)"],["smooth step","v*v*(3 - 2*v)"],
+  ["aggressive","min(1, v/0.6)"],["S-curve","0.5 + 0.5*sin(pi*(v - 0.5))"],
+  ["center boost","v + 0.15*sin(pi*v)"],["dead-center push","max(0, (v - 0.08)/0.92)**1.5"],
+];
+
+/* ---------------- api ---------------- */
+async function api(path, body){
+  const r = await fetch(path, body === undefined ? {} :
+    {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+  return r.json();
+}
+function compileExpr(expr){
+  try{
+    const fn = new Function("v", `"use strict";
+      const {sin,cos,tan,sqrt,abs,pi,min,max,pow,exp,log} = Math;
+      return (${expr});`);
+    const t = fn(0.5);
+    if (typeof t !== "number" || !isFinite(t)) return null;
+    return fn;
+  }catch{ return null; }
+}
+
+/* ---------------- config ---------------- */
+/* Sliders commit on "change" (release) — never mid-drag — so the live
+   echo can never fight a value you are still dragging.  The echo only
+   rewrites a slider when it is NOT focused AND its value actually
+   differs (remote change / another tab). */
+let cfgTimer = null;
+function postConfig(patch){
+  clearTimeout(cfgTimer);
+  cfgTimer = setTimeout(()=>api("/api/config", patch), 60);
+}
+function setControlValues(cfg){
+  state.config = cfg;
+  const mode = cfg.normalize_mode || "full";
+  for (const b of document.querySelectorAll("#segNorm button"))
+    b.classList.toggle("on", b.dataset.v === mode);
+  for (const b of document.querySelectorAll("#segStick button"))
+    b.classList.toggle("on", b.dataset.v === cfg.stick);
+  const setSlider = (id, valId, attr, fmt) => {
+    const el = $(id);
+    const dragging = document.activeElement === el;
+    if (!dragging && Math.abs(el.value - cfg[attr]) > 1e-9)
+      el.value = cfg[attr];
+    $(valId).textContent = fmt(el.value);
+  };
+  setSlider("#slDead","#vDead","deadzone", v=>(+v).toFixed(2));
+  setSlider("#slGain","#vGain","gain", v=>(+v).toFixed(2));
+  setSlider("#slStickDz","#vStickDz","stick_deadzone", v=>(+v).toFixed(2));
+  setSlider("#slHz","#vHz","max_update_hz", v=>v);
+  for (const [id,attr] of [["#tglInvX","invert_x"],["#tglInvY","invert_y"],["#tglTrig","trigger_w"]])
+    if ($(id).classList.contains("on") !== !!cfg[attr])
+      $(id).classList.toggle("on", !!cfg[attr]);
+  $("#curvePreset").value =
+    (cfg.curve && PRESETS.some(p=>p[0]===cfg.curve)) ? cfg.curve : "linear";
+  // Recompile + redraw the curve ONLY when the expression actually changed —
+  // compiling a new Function every frame was what made the page lag.
+  const exprStr = cfg.curve_expr || "v";
+  if (exprStr !== lastCurveExpr){
+    const fn = compileExpr(exprStr);
+    if (fn){ curveFn = fn; drawCurve(); lastCurveExpr = exprStr; }
+  }
+  const capTxt = cfg.stick === "right" ? "Stick · right" : "Stick · left";
+  if ($("#stickCard .cap").textContent !== capTxt)
+    $("#stickCard .cap").textContent = capTxt;
+}
+function bindControls(){
+  const seg = (sel, attr) =>
+    document.querySelectorAll(sel + " button").forEach(b =>
+      b.onclick = () => {
+        for (const x of document.querySelectorAll(sel + " button"))
+          x.classList.toggle("on", x === b);
+        postConfig({[attr]: b.dataset.v});
+      });
+  seg("#segNorm", "normalize_mode");
+  seg("#segStick", "stick");
+  const slider = (id, valId, attr, fmt) => {
+    const el = $(id);
+    el.addEventListener("input", () => { $(valId).textContent = fmt(el.value); });
+    el.addEventListener("change", () => {            // commit on release
+      state.config[attr] = +el.value;
+      postConfig({[attr]: +el.value});
+    });
+  };
+  slider("#slDead","#vDead","deadzone", v=>(+v).toFixed(2));
+  slider("#slGain","#vGain","gain", v=>(+v).toFixed(2));
+  slider("#slStickDz","#vStickDz","stick_deadzone", v=>(+v).toFixed(2));
+  slider("#slHz","#vHz","max_update_hz", v=>v);
+  const tgl = (id, attr) => $(id).onclick = () => {
+    const on = $(id).classList.toggle("on");
+    state.config[attr] = on;
+    postConfig({[attr]: on});
+  };
+  tgl("#tglInvX","invert_x"); tgl("#tglInvY","invert_y"); tgl("#tglTrig","trigger_w");
+
+  const sel = $("#curvePreset");
+  for (const [n,e] of PRESETS){
+    const o = document.createElement("option"); o.value = n; o.textContent = n; sel.appendChild(o);
+  }
+  sel.onchange = async () => {
+    const expr = PRESETS.find(p=>p[0]===sel.value)[1];
+    const local = compileExpr(expr);
+    if (!local){ $("#curveErr").textContent = "invalid expression"; return; }
+    curveFn = local; drawCurve(); $("#curveErr").textContent = "";
+    lastCurveExpr = expr;
+    state.config.curve = sel.value; state.config.curve_expr = expr;
+    const res = await api("/api/config", {curve: sel.value, curve_expr: expr});
+    if (!res || !res.ok) $("#curveErr").textContent = "not applied — check the engine";
+  };
+}
+
+/* ---------------- toasts ---------------- */
+function toast(text, color){
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.style.borderColor = (color || "#8b95a7") + "55";
+  el.textContent = text;
+  $("#toasts").appendChild(el);
+  while ($("#toasts").children.length > 3) $("#toasts").firstChild.remove();
+  setTimeout(()=>{ el.classList.add("out"); setTimeout(()=>el.remove(), 600); }, 4200);
+}
+
+/* ---------------- apply SSE snapshot (diff-based, cheap) ---------------- */
+let lastNotifId = 0;
+let lastTele = "";
+function apply(s){
+  if (!s) return;
+  const wasRunning = state.running;
+  Object.assign(state, s, {keys: s.keys || state.keys, pad: s.pad || state.pad});
+  if (s.config) setControlValues(s.config);
+  $("#statusTxt").textContent = state.status;
+  $("#dot").style.color = state.statusColor;
+  $("#dot").style.background = state.statusColor;
+  const be = $("#btnEngine");
+  if (state.running){ be.textContent = "Stop"; be.className = "danger"; be.disabled = false; }
+  else if (state.starting){ be.textContent = "Connecting…"; be.className = ""; be.disabled = true; }
+  else { be.textContent = "Connect & Start"; be.className = "primary"; be.disabled = false; }
+  $("#btnCalib").disabled = !state.running || state.calibRunning;
+  if (wasRunning !== state.running)
+    toast(state.running ? "engine started" : "engine stopped",
+          state.running ? "#34d399" : "#8b95a7");
+  let t;
+  if (state.running){
+    t = "vendor frames  " + state.vendorFrames + "\n" +
+        "engine polls   " + state.polls + "\n" +
+        "cfg            " + (state.config.normalize_mode||"?") + "/" + (state.config.stick||"?") + "\n" +
+        (state.fw ? "fw             " + state.fw + "\n" : "") +
+        (state.dryRun ? "DRY-RUN (no virtual pad)\n" : "") +
+        (state.streamDead ? "⚠ ADC STREAM DEAD — unplug & replug\n" : "");
+  } else t = "idle";
+  if (t !== lastTele){
+    lastTele = t;
+    $("#tele").innerHTML = t
+      .replace(/⚠ ADC STREAM DEAD.*/,"<span class='bad'>⚠ ADC STREAM DEAD — unplug & replug</span>")
+      .replace(/^idle$/,"<span class='ok'>idle</span>");
+  }
+  for (const n of (s.notifs || []))
+    if (n[0] > lastNotifId){ lastNotifId = n[0]; toast(n[1], n[2]); }
+}
+
+/* ---------------- events ---------------- */
+let pending = null;
+function connectEvents(){
+  const es = new EventSource("/events");
+  es.onmessage = e => { pending = JSON.parse(e.data); };
+  es.onerror = () => {
+    lastTele = "";
+    $("#tele").innerHTML = "<span class='bad'>connection lost — retrying…</span>";
+    es.close();
+    setTimeout(connectEvents, 1500);
+  };
+}
+setInterval(() => { if (pending){ apply(pending); pending = null; } }, 33);
+
+/* ---------------- stick canvas ---------------- */
+const sc = $("#stick"), sx = sc.getContext("2d");
+const S = 460, CX = S/2, CY = S/2, R = S/2 - 106;  // 154 — leaves room for the raw ghost (up to 1.414·R)
+function keycap(x, y, ch, hot){
+  sx.save();
+  sx.beginPath(); sx.roundRect(x-17, y-17, 34, 34, 8);
+  sx.fillStyle = "rgba(9,14,24,.9)"; sx.fill();
+  sx.strokeStyle = hot ? "rgba(34,211,238,.8)" : "rgba(148,163,184,.18)";
+  sx.lineWidth = 1.2; sx.stroke();
+  sx.fillStyle = hot ? "#22d3ee" : "#5b6474";
+  sx.font = "700 16px 'Segoe UI'";
+  sx.textAlign = "center"; sx.textBaseline = "middle";
+  sx.shadowColor = hot ? "rgba(34,211,238,.8)" : "transparent";
+  sx.shadowBlur = hot ? 10 : 0;
+  sx.fillText(ch, x, y+1);
+  sx.restore();
+}
+function drawStick(){
+  sx.clearRect(0,0,S,S);
+  for (const [f,col] of [[1,"rgba(148,163,184,.22)"],[0.66,"rgba(148,163,184,.13)"],[0.33,"rgba(148,163,184,.09)"]]){
+    sx.beginPath(); sx.arc(CX,CY,R*f,0,Math.PI*2);
+    sx.strokeStyle = col; sx.lineWidth = 1; sx.stroke();
+  }
+  sx.beginPath(); sx.moveTo(CX,CY-R); sx.lineTo(CX,CY+R);
+  sx.moveTo(CX-R,CY); sx.lineTo(CX+R,CY);
+  sx.strokeStyle = "rgba(148,163,184,.08)"; sx.stroke();
+  const p = state.pad;
+  // raw ghost (pre-normalization) — dashed, subtle.
+  // Safety-clamp to the true raw max (√2) — the pad ring (R=154) is sized so
+  // even a full diagonal (1.414·R) stays inside the canvas and never vanishes.
+  if (Math.abs(p.gx) > 0.02 || Math.abs(p.gy) > 0.02){
+    let grx = Math.max(-1,Math.min(1,p.gx)), gry = Math.max(-1,Math.min(1,p.gy));
+    const gm = Math.hypot(grx, gry), GMAX = Math.SQRT2;
+    if (gm > GMAX){ grx /= gm; gry /= gm; }
+    const gx = CX + grx*R, gy = CY - gry*R;
+    sx.beginPath(); sx.arc(gx,gy,8,0,Math.PI*2);
+    sx.setLineDash([4,4]); sx.strokeStyle = "rgba(120,135,160,.4)"; sx.lineWidth = 1.2; sx.stroke();
+    sx.setLineDash([]);
+  }
+  const bx = CX + p.x*R, by = CY - p.y*R;
+  sx.save();
+  sx.shadowColor = "rgba(34,211,238,.9)"; sx.shadowBlur = 22;
+  sx.beginPath(); sx.arc(bx,by,9.5,0,Math.PI*2);
+  sx.fillStyle = "#8b5cf6"; sx.fill();
+  sx.restore();
+  sx.beginPath(); sx.arc(bx,by,9.5,0,Math.PI*2);
+  sx.strokeStyle = "#22d3ee"; sx.lineWidth = 2; sx.stroke();
+  sx.beginPath(); sx.arc(bx-2.6,by-2.6,3,0,Math.PI*2);
+  sx.fillStyle = "#dbeafe"; sx.fill();
+  // keycap chips at the cardinal spots (W top / A left / S bottom / D right):
+  // lit by RAW key travel (always matches the bars), the ball shows the real
+  // (normalized, possibly inverted) stick position. Clear of the ring (R=154).
+  keycap(CX, 30, "W", (state.keys.W||0) > 0.08);
+  keycap(CX, S-30, "S", (state.keys.S||0) > 0.08);
+  keycap(30, CY, "A", (state.keys.A||0) > 0.08);
+  keycap(S-30, CY, "D", (state.keys.D||0) > 0.08);
+  $("#magLine").textContent =
+    "magnitude " + state.pad.mag.toFixed(2) +
+    "  ·  x " + (p.x>=0?"+":"") + p.x.toFixed(2) +
+    "  y " + (p.y>=0?"+":"") + p.y.toFixed(2);
+}
+
+/* ---------------- curve plot ---------------- */
+function drawCurve(){
+  const c = $("#curvePlot"), x = c.getContext("2d");
+  const W = c.width, H = c.height, x0=10,y0=8,x1=W-10,y1=H-8;
+  x.clearRect(0,0,W,H);
+  x.strokeStyle = "rgba(148,163,184,.08)";
+  for (let g=0; g<=4; g++){
+    const gx = x0 + (x1-x0)*g/4, gy = y1 - (y1-y0)*g/4;
+    x.beginPath(); x.moveTo(gx,y0); x.lineTo(gx,y1); x.stroke();
+    x.beginPath(); x.moveTo(x0,gy); x.lineTo(x1,gy); x.stroke();
+  }
+  x.setLineDash([5,5]); x.strokeStyle = "rgba(120,135,160,.35)";
+  x.beginPath(); x.moveTo(x0,y1); x.lineTo(x1,y0); x.stroke(); x.setLineDash([]);
+  x.beginPath();
+  const n = 90;
+  for (let i=0;i<=n;i++){
+    const v = i/n, o = Math.max(0, Math.min(1, curveFn(v)));
+    const px = x0 + (x1-x0)*v, py = y1 - (y1-y0)*o;
+    i ? x.lineTo(px,py) : x.moveTo(px,py);
+  }
+  x.strokeStyle = "#ff3b3b"; x.lineWidth = 2.2;
+  x.stroke();
+}
+
+/* ---------------- main loop ---------------- */
+const lastBar = {W:-1,A:-1,S:-1,D:-1};
+const barEls = [...document.querySelectorAll("#bars .bar")].map(el => ({
+  el, k: el.dataset.k, fill: el.querySelector(".fill"),
+  val: el.querySelector(".val"), cap: el.querySelector(".cap"),
+}));
+let stickDirty = true;
+let lastPad = {x:-1, y:-1, mag:-1};
+const lastKey = {W:-1,A:-1,S:-1,D:-1};
+function frame(){
+  const p = state.pad, k = state.keys;
+  let dirty = stickDirty || Math.abs(p.x-lastPad.x) > 1e-4 ||
+    Math.abs(p.y-lastPad.y) > 1e-4 || Math.abs(p.mag-lastPad.mag) > 1e-4;
+  for (const key of ["W","A","S","D"])
+    if (Math.abs((k[key]||0) - lastKey[key]) > 0.02) dirty = true;
+  if (dirty){
+    lastPad = {x:p.x, y:p.y, mag:p.mag};
+    for (const key of ["W","A","S","D"]) lastKey[key] = k[key] || 0;
+    stickDirty = false;
+    drawStick();
+  }
+  for (const b of barEls){
+    const v = Math.min(1, k[b.k] || 0);
+    if (Math.abs(v - lastBar[b.k]) > 0.004){
+      lastBar[b.k] = v;
+      b.fill.style.width = (v*100).toFixed(1) + "%";
+      b.val.textContent = Math.round(v*100);
+      b.cap.style.color = v > 0.85 ? "var(--accent)" : "var(--accent2)";
+    }
+  }
+  requestAnimationFrame(frame);
+}
+
+/* ---------------- boot ---------------- */
+$("#btnEngine").onclick = async () => {
+  if (state.starting) return;
+  const next = !state.running;
+  const be = $("#btnEngine");
+  if (next){ be.textContent = "Connecting…"; be.className = ""; be.disabled = true; }
+  const r = await api(next ? "/api/start" : "/api/stop");
+  if (r && r.error) toast(r.error, "#fb7185");
+};
+$("#btnCalib").onclick = async () => {
+  const r = await api("/api/calibrate");
+  if (r && r.error) toast(r.error, "#fb7185");
+};
+bindControls();
+fetch("/state").then(r=>r.json()).then(apply).catch(()=>{});
+connectEvents();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
