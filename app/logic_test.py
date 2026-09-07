@@ -195,12 +195,57 @@ def test_bridge_math():
     check(curve_apply(0.5, None) == 0.5, "curve: None fn passthrough")
 
 
+# --------------------------------------------------- trigger option
+def test_trigger_block_y():
+    from gamepad_bridge import GamepadConfig, GamepadBridge
+    # dry-run bridge: all math runs, no virtual pad registered
+    b = GamepadBridge(GamepadConfig())
+    b.dry_run = True
+
+    def run(w=1.0, a=0.0, s=0.0, d=0.0, **kw):
+        b.cfg = GamepadConfig(**kw)
+        # clear the update throttle + last-state so every assertion sees
+        # FRESH output (the 500 Hz throttle suppresses back-to-back calls
+        # that compute the same values)
+        b._last_update = 0.0
+        b.last_x = b.last_y = None
+        b.last_triggers = (None, None)
+        return b.update(w, a, s, d)
+
+    # baseline: W alone moves the stick up AND pulls LT
+    x16, y16 = run(1.0, 0.0, 0.0, 0.0, trigger_w=True)
+    check(y16 > 10000, "trigger_w: W moves the stick (y>0)")
+    check(b.last_triggers[0] > 100, "trigger_w: LT follows W")
+
+    # block_y_on_trigger: W becomes trigger-only — no vertical stick
+    x16, y16 = run(1.0, 0.0, 0.0, 0.0, trigger_w=True, block_y_on_trigger=True)
+    check(y16 == 0, "block_y_on_trigger: vertical stick suppressed (y==0)")
+    check(b.last_triggers[0] > 100, "block_y_on_trigger: LT still pulls")
+
+    # W+S in triggers-only mode: both triggers pull, stick stays centred
+    x16, y16 = run(1.0, 0.0, 1.0, 0.0, trigger_w=True, block_y_on_trigger=True)
+    check(y16 == 0 and x16 == 0 and
+          b.last_triggers[0] > 100 and b.last_triggers[1] > 100,
+          "block_y_on_trigger: W+S pulls both triggers, stick centred")
+
+    # x-axis (A/D) is untouched by the option
+    x16, y16 = run(0.0, 0.0, 0.0, 1.0, trigger_w=True, block_y_on_trigger=True)
+    check(x16 > 10000 and y16 == 0,
+          "block_y_on_trigger: A/D (x-axis) unaffected")
+
+    # option without trigger_w changes nothing
+    x16, y16 = run(1.0, 0.0, 0.0, 0.0, trigger_w=False, block_y_on_trigger=True)
+    check(y16 > 10000, "block_y_on_trigger alone (no trigger_w): stick moves")
+
+
+
 if __name__ == "__main__":
     print("slice-pad logic tests (hardware-free)")
     test_ring_cache()
     test_restart_guard()
     test_config_clamp()
     test_bridge_math()
+    test_trigger_block_y()
     print("-" * 40)
     if fails:
         print(f"LOGIC FAIL ({len(fails)}):")

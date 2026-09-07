@@ -137,6 +137,8 @@
     border-radius:50%;background:var(--faint);transition:all .18s}
   .tgl.on .sw{background:var(--accent)}
   .tgl.on .sw::after{left:17px;background:#fff}
+  .tgl.sub{padding-left:44px;font-size:11.5px;color:var(--dim)}
+  .tgl.dep-off{opacity:.35;pointer-events:none}
   /* curve */
   #curveWrap{border:1px solid var(--border);border-radius:10px;
     padding:10px;margin-top:10px}
@@ -246,6 +248,7 @@
         <div class="tgl" id="tglInvX"><div class="sw"></div>Invert X axis</div>
         <div class="tgl" id="tglInvY"><div class="sw"></div>Invert Y axis</div>
         <div class="tgl" id="tglTrig"><div class="sw"></div>Drive triggers with W/S (0–255)</div>
+        <div class="tgl sub" id="tglBlockY"><div class="sw"></div>W/S: triggers only — no vertical stick</div>
         <div class="srow" style="margin-top:12px">
           <label>Max update rate (Hz)</label>
           <input type="range" id="slHz" min="30" max="1000" step="10">
@@ -329,9 +332,11 @@ function setControlValues(cfg){
   setSlider("#slGain","#vGain","gain", v=>(+v).toFixed(2));
   setSlider("#slStickDz","#vStickDz","stick_deadzone", v=>(+v).toFixed(2));
   setSlider("#slHz","#vHz","max_update_hz", v=>v);
-  for (const [id,attr] of [["#tglInvX","invert_x"],["#tglInvY","invert_y"],["#tglTrig","trigger_w"]])
+  for (const [id,attr] of [["#tglInvX","invert_x"],["#tglInvY","invert_y"],["#tglTrig","trigger_w"],["#tglBlockY","block_y_on_trigger"]])
     if ($(id).classList.contains("on") !== !!cfg[attr])
       $(id).classList.toggle("on", !!cfg[attr]);
+  // dependency states: a sub-option is inert unless its parent is on
+  $("#tglBlockY").classList.toggle("dep-off", !cfg.trigger_w);
   $("#curvePreset").value =
     (cfg.curve && PRESETS.some(p=>p[0]===cfg.curve)) ? cfg.curve : "linear";
   // Recompile + redraw the curve ONLY when the expression actually changed —
@@ -370,9 +375,15 @@ function bindControls(){
   const tgl = (id, attr) => $(id).onclick = () => {
     const on = $(id).classList.toggle("on");
     state.config[attr] = on;
-    postConfig({[attr]: on});
+    const patch = {[attr]: on};
+    // turning a parent off clears its dependent so the server state
+    // (and the engine behaviour) never keeps a stale sub-option alive
+    if (id === "#tglTrig" && !on) patch.block_y_on_trigger = false;
+    postConfig(patch);
+    if (id === "#tglTrig") $("#tglBlockY").classList.toggle("dep-off", !on);
   };
   tgl("#tglInvX","invert_x"); tgl("#tglInvY","invert_y"); tgl("#tglTrig","trigger_w");
+  tgl("#tglBlockY","block_y_on_trigger");
 
   const sel = $("#curvePreset");
   for (const [n,e] of PRESETS){

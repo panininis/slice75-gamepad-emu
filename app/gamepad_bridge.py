@@ -122,6 +122,8 @@ class GamepadConfig:
     stick_deadzone: float = 0.03          # circular deadzone 0..0.5
     max_update_hz: int = 500              # throttle pad.update()
     trigger_w: bool = False               # map W/S travel to LT/RT (0..255)
+    block_y_on_trigger: bool = False      # with trigger_w: W/S only pull the
+                                          # triggers — no vertical stick move
     digital_fallback: bool = False        # if analog ~0, still send digital dir
     live_autocal: bool = True             # self-calibrate key mapping on use
 
@@ -261,17 +263,24 @@ class GamepadBridge:
         if cfg.invert_y:
             y = -y
 
-        # digital fallback: if everything is ~zero, no stick input
+        # option: while driving the triggers with W/S, suppress the vertical
+        # stick so W/S act ONLY as LT/RT (the trigger, not the stick, is the
+        # "drive" channel in this mode).
+        if cfg.trigger_w and cfg.block_y_on_trigger:
+            y = 0.0
+
+        # digital fallback: if everything is ~zero, no stick input.
+        # The triggers are computed INDEPENDENTLY of the stick (in
+        # triggers-only mode the stick can be centred while W/S pull LT/RT).
         if abs(x) < 1e-6 and abs(y) < 1e-6 and not cfg.digital_fallback:
             x16 = y16 = 0
-            lt = rt = 0
         else:
             x16 = int(round(x * 32767))
             y16 = int(round(y * 32767))
             x16 = max(-32767, min(32767, x16))
             y16 = max(-32767, min(32767, y16))
-            lt = int(round(vw * 255)) if cfg.trigger_w else 0
-            rt = int(round(vs * 255)) if cfg.trigger_w else 0
+        lt = int(round(vw * 255)) if cfg.trigger_w else 0
+        rt = int(round(vs * 255)) if cfg.trigger_w else 0
 
         now = time.monotonic()
         min_interval = 1.0 / max(1, cfg.max_update_hz)

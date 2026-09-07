@@ -272,11 +272,11 @@ class App(ctk.CTk):
 
     def _save_config(self):
         os.makedirs(APP_DIR, exist_ok=True)
-        d = {}
-        for k in ("normalize_mode", "stick", "invert_x", "invert_y", "deadzone",
-                  "gain", "curve", "curve_expr", "stick_deadzone",
-                  "max_update_hz", "trigger_w", "digital_fallback"):
-            d[k] = getattr(self.cfg, k)
+        # save every GamepadConfig field (dataclasses.fields) — a hard-coded
+        # key list here silently dropped newer options (block_y_on_trigger,
+        # ...) the next time the desktop app saved, reverting web-UI settings.
+        from dataclasses import fields
+        d = {f.name: getattr(self.cfg, f.name) for f in fields(GamepadConfig)}
         with open(CFG_PATH, "w") as f:
             json.dump(d, f, indent=2)
 

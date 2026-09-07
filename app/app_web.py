@@ -44,13 +44,14 @@ PORT = int(os.environ.get("SLICE_PAD_WEB_PORT", "8321"))
 
 CONFIG_KEYS = ("normalize_mode", "stick", "invert_x", "invert_y", "deadzone",
                "gain", "curve", "curve_expr", "stick_deadzone", "max_update_hz",
-               "trigger_w", "digital_fallback")
+               "trigger_w", "block_y_on_trigger", "digital_fallback")
 
 # allowed / clamped ranges per config key (also enforced by load_config on a
 # hand-edited config.json)
 def _clamp_cfg(k: str, v):
     """Coerce + range-clamp one config value. Returns (ok, value)."""
-    if k in ("invert_x", "invert_y", "trigger_w", "digital_fallback"):
+    if k in ("invert_x", "invert_y", "trigger_w", "block_y_on_trigger",
+             "digital_fallback"):
         return True, bool(v)
     if k == "max_update_hz":
         try:
