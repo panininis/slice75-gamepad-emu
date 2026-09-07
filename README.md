@@ -114,7 +114,6 @@ app/
   slice_capture.py  HID access: vendor stream, HID analog block, digital keys,
                     vendor packet builder, mapping persistence
   gamepad_bridge.py virtual X360 pad, diagonal normalization, curves, deadzones
-  mapping.json      adc_pos ground truth (W:44 A:62 S:63 D:64)
   smoke.py          GUI + math smoke test (no keys needed)
   logic_test.py     hardware-free logic tests (ring cache, restart guard,
                     config clamping, bridge math) — runs anywhere, no HID

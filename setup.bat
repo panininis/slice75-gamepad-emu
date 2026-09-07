@@ -11,7 +11,9 @@ if errorlevel 1 (
 )
 uv venv --python 3.12 .venv
 set VGAMEPAD_SKIP_VIGEMBUS_INSTALL=1
-uv pip install --python .venv\Scripts\python.exe hidapi customtkinter vgamepad numpy
+rem Pinned deps from requirements.txt (hidapi, vgamepad, customtkinter) —
+rem the single source of truth, so setup.bat can't drift from it.
+uv pip install --python .venv\Scripts\python.exe -r requirements.txt
 rem Install the ViGEmBus kernel driver (virtual Xbox 360 bus).
 echo Installing ViGEmBus driver (UAC prompt may appear)...
 start "" msiexec /i "%~dp0.venv\Lib\site-packages\vgamepad\win\vigem\install\x64\ViGEmBusSetup_x64.msi" /qn /norestart
